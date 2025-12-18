@@ -1,218 +1,524 @@
 <script setup>
-  import { ref, onMounted } from 'vue'
-  import { useRouter } from 'vue-router'
-  import { supabase } from '../supabase' 
-  import { createSession, uploadImage, eventBus } from '../api.js'
-  import { showToast } from '../toast.js' 
+  import { ref, onMounted, onUnmounted } from "vue";
+  import { useRouter } from "vue-router";
+  import { supabase } from "../supabase";
+  import { createSession, uploadImage, eventBus } from "../api.js";
+  import { showToast } from "../toast.js";
+  import gsap from "gsap";
   
-  const router = useRouter()
-  const fileInput = ref(null)
-  const isLoading = ref(false)
-  const showFreeBadge = ref(false) 
+  // Refs pra animações de texto
+  const contentLeft = ref(null);
   
-  const LOCAL_STORAGE_KEY = 'tramagrid_anon_used'
-
-  // --- Função auxiliar para garantir que o perfil existe ---
+  // =================================================================================
+  // 1. LÓGICA DE NEGÓCIOS (Upload, Auth, Supabase)
+  // =================================================================================
+  const router = useRouter();
+  const fileInput = ref(null);
+  const isLoading = ref(false);
+  const showFreeBadge = ref(false);
+  const LOCAL_STORAGE_KEY = "tramagrid_anon_used";
+  
   async function getOrCreateProfile(user) {
-      let { data: profile } = await supabase
-          .from('profiles')
-          .select('credits, free_generation_used')
-          .eq('id', user.id)
-          .maybeSingle()
-      
-      if (!profile) {
-          const { data: newProfile } = await supabase
-              .from('profiles')
-              .insert([{ id: user.id, email: user.email, credits: 0, free_generation_used: false }])
-              .select()
-              .single()
-          return newProfile
-      }
-      return profile
-  }
-
-  // --- 1. VERIFICAÇÃO VISUAL AO CARREGAR ---
-  onMounted(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-        const profile = await getOrCreateProfile(user)
-        if (profile && !profile.free_generation_used) showFreeBadge.value = true
-    } else {
-        const jaUsouAnonimo = localStorage.getItem(LOCAL_STORAGE_KEY)
-        if (!jaUsouAnonimo) showFreeBadge.value = true
-    }
-  })
+    let { data: profile } = await supabase
+      .from("profiles")
+      .select("credits, free_generation_used")
+      .eq("id", user.id)
+      .maybeSingle();
   
-  // --- 2. UPLOAD COM VALIDAÇÃO ROBUSTA ---
+    if (!profile) {
+      const { data: newProfile } = await supabase
+        .from("profiles")
+        .insert([
+          {
+            id: user.id,
+            email: user.email,
+            credits: 0,
+            free_generation_used: false,
+          },
+        ])
+        .select()
+        .single();
+      return newProfile;
+    }
+    return profile;
+  }
+  
   async function handleStartUpload(e) {
-    const file = e.target.files[0]
-    if (!file) return
+    const file = e.target.files[0];
+    if (!file) return;
   
-    isLoading.value = true
-    
+    isLoading.value = true;
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      
-      // A. USUÁRIO LOGADO: Pede ao backend para cobrar
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+  
       if (user) {
-          const apiBase = import.meta.env.VITE_API_URL || ''
-          
-          // Chama a rota de consumo de crédito
-          const res = await fetch(`${apiBase}/api/consume-credit`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ user_id: user.id })
-          })
-
-          if (!res.ok) {
-              // Tenta ler o erro específico (ex: "Saldo insuficiente")
-              const errorData = await res.json().catch(() => ({}))
-              const errorMessage = errorData.detail || "Erro desconhecido"
-
-              console.warn("⚠️ Resposta do Backend:", res.status, errorMessage)
-
-              // TRATAMENTO DE ERROS ESPECÍFICOS
-              if (res.status === 402) {
-                  showToast("Seus créditos acabaram! Redirecionando...", "warning")
-                  setTimeout(() => router.push('/buy-credits'), 1500)
-              } else {
-                  // Outros erros (500, etc)
-                  showToast(`Erro: ${errorMessage}`, "error")
-              }
-              
-              // Reseta o input para permitir tentar de novo depois
-              if (fileInput.value) fileInput.value.value = ''
-              return // Para a execução aqui se deu erro
+        const apiBase = import.meta.env.VITE_API_URL || "";
+        const res = await fetch(`${apiBase}/api/consume-credit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: user.id }),
+        });
+  
+        if (!res.ok) {
+          if (res.status === 402) {
+            showToast("Seus créditos acabaram!", "warning");
+            setTimeout(() => router.push("/buy-credits"), 1500);
+          } else {
+            showToast(`Erro no backend`, "error");
           }
-          
-          // Se passou, atualiza a UI
-          eventBus.dispatchEvent(new Event('credits-updated'))
-
+          if (fileInput.value) fileInput.value.value = "";
+          return;
+        }
+        eventBus.dispatchEvent(new Event("credits-updated"));
       } else {
-          // B. USUÁRIO ANÔNIMO: Verifica localmente
-          const jaUsou = localStorage.getItem(LOCAL_STORAGE_KEY)
-          if (jaUsou) {
-              showToast("Cota de visitante esgotada. Entre para continuar!", "info")
-              setTimeout(() => router.push('/login'), 1500)
-              
-              if (fileInput.value) fileInput.value.value = ''
-              return
-          }
-          localStorage.setItem(LOCAL_STORAGE_KEY, 'true')
+        if (localStorage.getItem(LOCAL_STORAGE_KEY)) {
+          showToast("Cota esgotada. Entre para continuar!", "info");
+          setTimeout(() => router.push("/login"), 1500);
+          if (fileInput.value) fileInput.value.value = "";
+          return;
+        }
+        localStorage.setItem(LOCAL_STORAGE_KEY, "true");
       }
-
-      // C. GERAÇÃO (Só acontece se não caiu nos returns acima)
-      await createSession()
-      await uploadImage(file)
-      
-      showToast("Gráfico gerado com sucesso!", "success")
-      router.push('/editor')
-
+  
+      await createSession();
+      await uploadImage(file);
+      showToast("Sucesso! Processando...", "success");
+      router.push("/editor");
     } catch (err) {
-      console.error(err)
-      showToast("Erro de conexão ou processamento.", "error")
+      console.error(err);
+      showToast("Erro de conexão.", "error");
     } finally {
-      isLoading.value = false
+      isLoading.value = false;
     }
   }
-</script>
-
-<template>
-  <div class="home-container">
+  
+  // =================================================================================
+  // 2. ANIMAÇÃO DO CANVAS (ondas DISCRETAS e LEVES)
+  // =================================================================================
+  const canvasRef = ref(null);
+  let ctx = null;
+  let cw = 0;
+  let ch = 0;
+  let hue = 180;
+  let nCubes = 0;
+  let cubes = [];
+  let staggerAnim = null;
+  
+  const img = new Image();
+  const img2 = new Image();
+  
+  const imgSrc1 =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAADIBAMAAADsElnyAAAAJFBMVEVHcEw+Pj5aWloQEBAZGRleXl6AgIDAwMBwcHCampq7u7tzc3M0sGdFAAAABXRSTlMAp/UwQ5FLsO8AAADxSURBVHgB7c9HcQRhDITRn8NgMABDWAjO6ewMYLgsWef8akelk1Pr/upTj023mkZxiK3dqSsODnpmdXBwUBlEaRCYckdtEKVBYModmKbQKDrGHZpaaPyqZxQaRc8oNPVyTaehUVRGURhFYerlmu2D5k3jqimO1+MCU4h5XFzc9sQjaXTO1vMTobMkXgmdBfFKNnTY8UroLIp3YkfxldBhB4QOAkIHAaHDDggdBIQOX0HoICB0EBA6CAgdlkPoICB0+ApCBwGhw1cQOggIBgHh5pCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQH0XuAS5hV4q0a3iHAAAAAElFTkSuQmCC";
+  const imgSrc2 =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAADIBAMAAADsElnyAAAAJFBMVEVHcEylpaXv7+/Gxsa+vr7m5uahoaE/Pz9/f3+Ojo5lZWWCgoKkaSxxAAAABnRSTlMA9TCcskPTdr2ZAAAA40lEQVR4Ae3POW0EQQBE0UZhBEawWBaAzz0QDIVhYgxmZ3X6pFZpIl/18xf8sep8GinFwzMmi8sFk8TlctFkockiGz80WWiyyMYPTRbZKLLxIxtFMIoVwCCSUQSTRDaeZ3POAKPIRpGNIhvPs3m8HOw0Pg+K+8fYo0FsY48GMUkyiEmSQUySDGKSZBCTJIOYZG0QkIVBQDQKydogIBqFRKOQaBSQYBAQDAKCQQSCUUg0CAhmLSAYhUSDgCwMIpFpFJnsW0lJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUnJjyJfg4PNmR1hT+AAAAAASUVORK5CYII=";
+  
+  const Cube = function (index, _x, _y, _s) {
+    this.img = img;
+    this.img2 = img2;
+    this.scale = _s;
+    this.x = _x;
+    this.y = _y;
+    this.z = 0;
+    this.img2_opacity = 0;
+  
+    this.draw = function () {
+      if (!ctx) return;
+      ctx.translate(this.x, this.y + this.z);
+      ctx.drawImage(
+        this.img,
+        (-100 / 2) * this.scale,
+        (-200 / 2) * this.scale,
+        100 * this.scale,
+        200 * this.scale
+      );
+      ctx.globalAlpha = this.img2_opacity;
+      ctx.drawImage(
+        this.img2,
+        (-100 / 2) * this.scale,
+        (-200 / 2) * this.scale,
+        100 * this.scale,
+        200 * this.scale
+      );
+      ctx.globalAlpha = 1;
+      ctx.translate(-this.x, -(this.y + this.z));
+    };
+  };
+  
+  function setGrid() {
+    if (!canvasRef.value) return;
+    const c = canvasRef.value;
+    c.width = window.innerWidth;
+    c.height = window.innerHeight;
+  
+    cw = Math.ceil(c.width / 100 + 1);
+    ch = Math.floor(c.height / 25 + 10);
+    cubes = [];
+    let i = 0;
+    for (let _y = 0; _y < ch; _y++) {
+      for (let _x = 0; _x < cw; _x++) {
+        if (_y % 2 === 0) {
+          cubes.push(new Cube(i, -25 + _x * 100, -75 + _y * 25, 0.9));
+        } else {
+          cubes.push(new Cube(i, 25 + _x * 100, -75 + _y * 25, 0.9));
+        }
+        i++;
+      }
+    }
+    nCubes = cubes.length;
+  }
+  
+  // ANIMAÇÃO DISCRETA E LEVE (ondas suaves)
+  function staggerFrom(from) {
+    return gsap
+      .timeline()
+      .to(
+        cubes,
+        {
+          duration: 3,
+          z: 30,
+          ease: "sine.inOut",
+          stagger: {
+            yoyo: true,
+            amount: 6,
+            grid: [ch, cw],
+            overwrite: "auto",
+            from: from,
+            onComplete: function () {
+              gsap.to(this.targets(), { duration: 4, z: 0, ease: "sine.inOut" });
+            },
+          },
+        },
+        0
+      )
+      .to(
+        cubes,
+        {
+          duration: 1.5,
+          img2_opacity: 0.5,
+          stagger: {
+            yoyo: true,
+            amount: 6,
+            grid: [ch, cw],
+            overwrite: "auto",
+            from: from,
+            onComplete: function () {
+              gsap.to(this.targets(), { duration: 2, img2_opacity: 0 });
+            },
+          },
+        },
+        0
+      );
+  }
+  
+  function anim() {
+    staggerAnim = gsap
+      .timeline({
+        onComplete: anim,
+        delay: 8,
+      })
+      .add(staggerFrom(gsap.utils.random(0, nCubes, 1)));
+  }
+  
+  const renderLoop = () => {
+    if (!ctx || !canvasRef.value) return;
+    const c = canvasRef.value;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.globalCompositeOperation = "source-over";
+    for (let i = 0; i < nCubes; i++) cubes[i].draw();
+    hue -= 0.5;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = "hsl(" + hue + ", 75%, 25%)";
+    ctx.fillRect(0, 0, c.width, c.height);
+  };
+  
+  const handleResize = () => setGrid();
+  
+  // =================================================================================
+  // 3. LIFECYCLE + ANIMAÇÕES DE TEXTO SUAVES (fade in)
+   // =================================================================================
+  onMounted(async () => {
+    if (canvasRef.value) {
+      ctx = canvasRef.value.getContext("2d");
+      let loadedCount = 0;
+      const checkLoad = () => {
+        loadedCount++;
+        if (loadedCount === 2) {
+          setGrid();
+          gsap.ticker.add(renderLoop);
+          gsap.delayedCall(0.2, anim);
+        }
+      };
+      img.onload = checkLoad;
+      img2.onload = checkLoad;
+      img.src = imgSrc1;
+      img2.src = imgSrc2;
+      window.addEventListener("resize", handleResize);
+    }
+  
+    // Auth Badge
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const p = await getOrCreateProfile(user);
+      if (p && !p.free_generation_used) showFreeBadge.value = true;
+    } else {
+      if (!localStorage.getItem(LOCAL_STORAGE_KEY)) showFreeBadge.value = true;
+    }
+  
+    // ANIMAÇÕES DE TEXTO SUAVES (fade in + leve movimento de cima)
+    gsap.timeline()
+      .from(contentLeft.value.children, {
+        y: 40,
+        opacity: 0,
+        duration: 1.2,
+        stagger: 0.2,
+        ease: "power2.out",
+      });
+  });
+  
+  onUnmounted(() => {
+    gsap.ticker.remove(renderLoop);
+    window.removeEventListener("resize", handleResize);
+    gsap.killTweensOf(cubes);
+    if (staggerAnim) staggerAnim.kill();
+  });
+  </script>
+  
+  <template>
+    <div class="landing-container">
+      <!-- CANVAS -->
+      <canvas ref="canvasRef" class="c"></canvas>
+  
+      <!-- OVERLAY PRETO COM GRADIENT -->
+      <div class="dark-overlay"></div>
+  
+      <!-- UI — TEXTO SOLTO, SEM CAIXA -->
+      <div class="ui-overlay">
+        <div ref="contentLeft" class="content-left">
+          
+          <div v-if="showFreeBadge" class="badge-pill">
+            🎁 1ª Geração Grátis
+          </div>
     
-    <div class="bg-overlay"></div>
-
-    <div class="content-wrapper">
-      <div class="hero-box glass">
-        <h1 class="title">Trama<span class="highlight">Grid</span></h1>
-        <p class="subtitle">Faça upload e veja seu gráfico pronto em segundos.</p>
-        
-        <div class="upload-area">
-          <div v-if="showFreeBadge" class="free-badge">🎁 1ª Geração Grátis</div>
-
-          <input 
-            type="file" 
-            ref="fileInput" 
-            @change="handleStartUpload" 
-            hidden 
-            accept="image/*" 
-          />
+          <h1 class="brand-title">TRAMA<span class="highlight">GRID</span></h1>
           
-          <button 
-            @click="fileInput.click()" 
-            class="btn-big-upload" 
-            :disabled="isLoading"
-          >
-            <span v-if="isLoading" class="spinner-small"></span>
-            <span v-else>📂 Carregar Imagem</span>
-          </button>
-          
-          <p class="hint">Suporta JPG e PNG. Processamento inteligente.</p>
+          <h2 class="hero-headline">
+            Transforme qualquer imagem em
+            <span class="text-gradient">PIXELS</span>
+          </h2>
+    
+          <p class="hero-description">
+            O TramaGrid converte suas fotos favoritas em gráficos prontos para crochê, 
+            tricô ou pixel art. Simplifique cores, edite a grade e baixe sua receita 
+            em segundos. Crie mais, conte menos pontos.
+          </p>
+    
+          <div class="action-area">
+            <input 
+              type="file" 
+              ref="fileInput" 
+              @change="handleStartUpload" 
+              hidden 
+              accept="image/*" 
+            />
+            
+            <button 
+              class="cta-btn-primary" 
+              @click="fileInput.click()" 
+              :disabled="isLoading"
+            >
+              <span v-if="isLoading" class="spinner"></span>
+              <span v-else>1º Teste Grátis &rarr;</span>
+            </button>
+          </div>
+    
         </div>
       </div>
     </div>
-  </div>
-</template>
-
-<style scoped>
-.home-container {
-  min-height: calc(100vh - 60px);
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: radial-gradient(circle at center, #2c3e50 0%, #000000 100%);
-}
-
-.bg-video {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
-}
-.bg-overlay {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1;
-}
-
-.content-wrapper {
-  position: relative; z-index: 2; width: 100%; max-width: 700px; padding: 20px; text-align: center;
-}
-
-/* Glassmorphism */
-.hero-box.glass {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  padding: 50px 40px;
-  box-shadow: 0 25px 50px rgba(0,0,0,0.5);
-  transition: transform 0.3s;
-}
-.hero-box:hover { transform: translateY(-5px); border-color: rgba(255, 255, 255, 0.2); }
-
-.title { font-size: 4rem; margin-bottom: 15px; color: white; font-weight: 800; letter-spacing: -2px; text-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-.highlight { color: #e67e22; }
-.subtitle { color: #ddd; font-size: 1.2rem; margin-bottom: 40px; line-height: 1.6; font-weight: 300; }
-
-.btn-big-upload {
-  background: linear-gradient(135deg, #e67e22 0%, #d35400 100%);
-  color: white; border: none; padding: 18px 50px; font-size: 1.3rem; font-weight: bold; border-radius: 50px; cursor: pointer; transition: all 0.3s; box-shadow: 0 10px 30px rgba(230, 126, 34, 0.4); display: inline-flex; align-items: center; gap: 12px; justify-content: center;
-}
-.btn-big-upload:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 15px 40px rgba(230, 126, 34, 0.6); filter: brightness(1.1); }
-.btn-big-upload:disabled { opacity: 0.7; cursor: wait; filter: grayscale(0.5); }
-
-.free-badge {
-  background: #27ae60; color: white; font-weight: bold; padding: 6px 16px; border-radius: 20px; display: inline-block; margin-bottom: 20px; font-size: 0.9rem; box-shadow: 0 0 15px rgba(39, 174, 96, 0.6); animation: float 3s ease-in-out infinite;
-}
-
-.hint { margin-top: 20px; font-size: 0.9rem; color: #aaa; }
-.spinner-small { width: 24px; height: 24px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s infinite linear; }
-
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-
-@media (max-width: 600px) {
-  .title { font-size: 3rem; }
-  .hero-box.glass { padding: 30px 20px; }
-  .btn-big-upload { width: 100%; }
-}
-</style>
+  </template>
+  
+  <style scoped>
+  /* =========================================
+     1. ESTRUTURA GERAL
+     ========================================= */
+  .landing-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #000;
+  }
+  
+  /* CANVAS */
+  canvas.c {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+  
+  /* OVERLAY PRETO COM GRADIENT */
+  .dark-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.4) 100%);
+    z-index: 1;
+    pointer-events: none;
+  }
+  
+  /* =========================================
+     2. UI & TIPOGRAFIA (SEM CAIXA — TEXTO SOLTO)
+     ========================================= */
+  .ui-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    padding-left: 8%;
+  }
+  
+  .content-left {
+    max-width: 700px;
+    color: white;
+    text-align: left;
+  }
+  
+  /* Badge */
+  .badge-pill {
+    display: inline-block;
+    background: rgba(39, 174, 96, 0.2);
+    border: 1px solid #27ae60;
+    color: #2ecc71;
+    padding: 6px 16px;
+    border-radius: 50px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 24px;
+    letter-spacing: 0.5px;
+    backdrop-filter: blur(4px);
+  }
+  
+  /* Título da Marca */
+  .brand-title {
+    font-family: system-ui, sans-serif;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    margin: 0 0 40px 0;
+    opacity: 0.8;
+    color: #fff;
+  }
+  .highlight { color: #e67e22; }
+  
+  /* Headline Principal */
+  .hero-headline {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 24px;
+  }
+  
+  .text-gradient {
+    background: linear-gradient(135deg, #e07e06e7 30%, #ede878 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: inline-block;
+  }
+  
+  /* Texto Explicativo */
+  .hero-description {
+    font-size: 1.15rem;
+    line-height: 1.6;
+    color: #ccc;
+    margin-bottom: 40px;
+    max-width: 480px;
+    font-weight: 300;
+  }
+  
+  /* Botão de Ação */
+  .action-area {
+    margin-top: 40px;
+  }
+  
+  .cta-btn-primary {
+    background: #e67e22;
+    color: white;
+    border: none;
+    padding: 18px 48px;
+    font-size: 1.1rem;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 20px rgba(230, 126, 34, 0.3);
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+  }
+  
+  .cta-btn-primary:hover:not(:disabled) {
+    background: #d35400;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(230, 126, 34, 0.5);
+  }
+  
+  .cta-btn-primary:disabled {
+    opacity: 0.7;
+    cursor: wait;
+    filter: grayscale(0.8);
+  }
+  
+  .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255,255,255,0.3);
+    border-radius: 50%;
+    border-top-color: #fff;
+    animation: spin 1s infinite linear;
+  }
+  
+  @keyframes spin { 
+    to { transform: rotate(360deg); } 
+  }
+  
+  /* Responsivo Mobile */
+  @media (max-width: 768px) {
+    .ui-overlay {
+      padding: 20px;
+      align-items: flex-end;
+      background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.9) 50%, #000 100%);
+    }
+  
+    .content-left {
+      margin-bottom: 40px;
+    }
+  
+    .hero-headline {
+      font-size: 2.2rem;
+    }
+  
+    .hero-description {
+      font-size: 1rem;
+    }
+  
+    .brand-title {
+      display: none;
+    }
+  }
+  </style>

@@ -2,82 +2,151 @@
   import { ref, onMounted, onUnmounted, watch, computed } from "vue";
   import { 
     getGridImage, updateParams, paintCell, getPixelIndex, 
-    replaceColor, undoLastAction, mergeColors, replaceColorInRegion,
-    activeColorIndex, getPalette, mergeState
-  } from "../api.js";
-  // IMPORTAR O TOAST E O CONFIRM
-  import { showToast, showConfirm } from "../toast.js";
-
+    mergeColors, replaceColorInRegion, activeColorIndex, 
+    getPalette, eventBus, addColor, getRowSummary 
+  } from "../api.js"; 
+  import { showToast, showConfirm } from "../toast.js"; 
+  import { 
+    Undo2, Ruler, Pencil, PaintBucket, 
+    Pipette, ChevronRight, ChevronLeft,
+    SquareDashedMousePointer, ZoomIn, X, Undo,
+    ChevronUp, ChevronDown, ArrowLeft, ArrowRight
+  } from "lucide-vue-next";
+  
   const imageSrc = ref("");
   const zoom = ref(1.0);
   const highlightedRow = ref(-1);
-  const currentTool = ref('ruler'); 
+  const currentTool = ref('brush'); 
+  const isHudMinimized = ref(false);
   const colorPickerInput = ref(null);
-  const selectedIndexForSwap = ref(-1);
   const fullPalette = ref([]); 
+  const rowSummary = ref([]);
   
-  // Seleção Retangular
+  const BACKEND_MARGIN = 20; 
+  const CELL_SIZE = 22;
+  
+  const panX = ref(0), panY = ref(0);
+  const isDragging = ref(false);
+  const dragStart = ref({ x: 0, y: 0 });
+  
   const selectionRect = ref(null); 
   const isSelecting = ref(false);
   const selStart = ref({ x: 0, y: 0 });
-
-  // Pan/Drag
-  const panX = ref(0);
-  const panY = ref(0);
-  const isDragging = ref(false);
-  const dragStartX = ref(0);
-  const dragStartY = ref(0);
   
   const activeColorHex = computed(() => {
     const color = fullPalette.value.find(c => c.index === activeColorIndex.value);
-    return color ? color.hex : 'transparent';
+    return color ? color.hex : '#ffffff';
   });
   
   async function refresh() {
     const data = await getGridImage();
     imageSrc.value = data;
-    try {
-      const pal = await getPalette();
-      fullPalette.value = Array.isArray(pal) ? pal : pal.palette || [];
-    } catch (e) {}
+    const pal = await getPalette();
+    fullPalette.value = Array.isArray(pal) ? pal : pal.palette || [];
   }
   
-  watch([zoom, highlightedRow], async () => {
-    await updateParams({ highlighted_row: highlightedRow.value });
+  watch(highlightedRow, async (newVal) => {
+    await updateParams({ highlighted_row: newVal });
+    if (newVal !== -1) {
+      try {
+        rowSummary.value = await getRowSummary(newVal); 
+      } catch (e) { console.error(e); rowSummary.value = []; }
+    } else {
+      rowSummary.value = [];
+    }
     refresh();
   });
   
-  watch(currentTool, (newTool) => {
-    if (newTool !== 'ruler') highlightedRow.value = -1;
+  onMounted(() => {
+    refresh();
+    eventBus.addEventListener('refresh', refresh);
   });
-
-  onMounted(() => { refresh(); window.refreshGrid = refresh; });
   
-  function handleWheel(e) {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    zoom.value = Math.max(0.3, Math.min(10, zoom.value * delta));
+  onUnmounted(() => {
+    eventBus.removeEventListener('refresh', refresh);
+  });
+  
+  function moveRow(delta) {
+    const imgEl = document.getElementById('grid-canvas');
+    if (!imgEl) return;
+    const maxRows = Math.round((imgEl.naturalHeight - 80) / CELL_SIZE);
+    
+    let next = highlightedRow.value + delta;
+    if (next < 1) next = 1;
+    if (next > maxRows) next = maxRows;
+    highlightedRow.value = next;
   }
-
+  
   function getGridCoords(clientX, clientY) {
     const canvasEl = document.querySelector('.canvas'); 
-    if (!canvasEl) return { x: -1, y: -1 };
+    if (!canvasEl) return { gridX: -1, gridY: -1 };
     const rect = canvasEl.getBoundingClientRect();
-    const relX = clientX - rect.left - panX.value;
-    const relY = clientY - rect.top - panY.value;
-    const rawX = relX / zoom.value;
-    const rawY = relY / zoom.value;
-    const MARGIN = 50; const CELL_SIZE = 22;
-    const gridX = Math.floor((rawX - MARGIN) / CELL_SIZE);
-    const gridY = Math.floor((rawY - MARGIN) / CELL_SIZE);
+    const relX = (clientX - rect.left - panX.value) / zoom.value;
+    const relY = (clientY + 2 - rect.top - panY.value) / zoom.value;
+    const gridX = Math.floor((relX - BACKEND_MARGIN) / CELL_SIZE);
+    const gridY = Math.floor((relY - BACKEND_MARGIN) / CELL_SIZE);
     return { gridX, gridY };
   }
-
+  
+  async function handleClick(e) {
+    if (isDragging.value || isSelecting.value) return; 
+    const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
+    if (gridX < 0 || gridY < 0) return; 
+  
+    if (currentTool.value === 'ruler') {
+      const imgEl = document.getElementById('grid-canvas');
+      const hc = Math.round((imgEl.naturalHeight - 80) / CELL_SIZE);
+      const rowNumber = hc - gridY;
+      highlightedRow.value = (highlightedRow.value === rowNumber) ? -1 : rowNumber;
+      return;
+    }
+  
+    const clickedIndex = await getPixelIndex(gridX, gridY);
+    if (clickedIndex === -1) return;
+  
+    if (currentTool.value === 'brush') {
+      await paintCell(gridX, gridY);
+      refresh();
+    } else if (currentTool.value === 'picker') {
+      activeColorIndex.value = clickedIndex;
+      currentTool.value = 'brush';
+      showToast("Cor capturada!", "info");
+    } else if (currentTool.value === 'bucket') {
+      const target = activeColorIndex.value;
+      if (target === clickedIndex) return;
+      if (selectionRect.value) {
+        await replaceColorInRegion(selectionRect.value.x, selectionRect.value.y, selectionRect.value.w, selectionRect.value.h, clickedIndex, target);
+        refresh();
+      } else {
+        if (await showConfirm("Substituir cor no gráfico todo?")) { 
+          await mergeColors(clickedIndex, target); 
+          refresh(); 
+        }
+      }
+    }
+  }
+  
+  async function toggleRuler() {
+    if (currentTool.value === 'ruler') {
+      currentTool.value = 'brush';
+      highlightedRow.value = -1;
+    } else {
+      currentTool.value = 'ruler';
+    }
+  }
+  
+  async function handleColorPicked(e) {
+    try {
+      const newIndex = await addColor(e.target.value);
+      activeColorIndex.value = newIndex;
+      refresh();
+    } catch (err) { showToast("Limite atingido", "warning"); }
+  }
+  
   function onMouseDown(e) {
-    if (e.button === 1 || currentTool.value === 'ruler') {
+    if (e.button === 1) { 
       isDragging.value = true;
-      dragStartX.value = e.clientX - panX.value;
-      dragStartY.value = e.clientY - panY.value;
+      dragStart.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
       return;
     }
     if (currentTool.value === 'select') {
@@ -85,223 +154,153 @@
       isSelecting.value = true;
       selStart.value = { x: gridX, y: gridY };
       selectionRect.value = { x: gridX, y: gridY, w: 1, h: 1 };
-      return;
     }
   }
-
+  
   function onMouseMove(e) {
     if (isDragging.value) {
-      panX.value = e.clientX - dragStartX.value;
-      panY.value = e.clientY - dragStartY.value;
-      return;
-    }
-    if (isSelecting.value) {
+      panX.value = e.clientX - dragStart.value.x;
+      panY.value = e.clientY - dragStart.value.y;
+    } else if (isSelecting.value) {
       const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
-      const startX = selStart.value.x;
-      const startY = selStart.value.y;
-      const minX = Math.min(startX, gridX);
-      const minY = Math.min(startY, gridY);
-      const w = Math.abs(gridX - startX) + 1;
-      const h = Math.abs(gridY - startY) + 1;
-      selectionRect.value = { x: minX, y: minY, w, h };
+      const x = Math.min(selStart.value.x, gridX);
+      const y = Math.min(selStart.value.y, gridY);
+      const w = Math.abs(gridX - selStart.value.x) + 1;
+      const h = Math.abs(gridY - selStart.value.y) + 1;
+      selectionRect.value = { x, y, w, h };
     }
   }
-
-  function onMouseUp() {
-    isDragging.value = false;
-    isSelecting.value = false;
-  }
-
-  // --- AQUI ESTÁ A MÁGICA ATUALIZADA ---
-  async function handleClick(e) {
-    if (isDragging.value || isSelecting.value) return; 
-    
-    const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
-    if (gridX < 0 || gridY < 0) return; 
-    
-    // ============================================
-    // 1. MODO UNIR (GLOBAL) - Prioridade Máxima
-    // ============================================
-    if (mergeState.value.isActive) {
-        const clickedIndex = await getPixelIndex(gridX, gridY);
-        if (clickedIndex === -1) return;
-
-        if (mergeState.value.sourceIndex === null) {
-            // FASE 1: Escolha da ORIGEM
-            mergeState.value.sourceIndex = clickedIndex;
-            showToast("Origem selecionada. Agora clique na cor de destino.", "info");
-        } 
-        else {
-            // FASE 2: Escolha do DESTINO
-            if (clickedIndex === mergeState.value.sourceIndex) {
-               showToast("Você clicou na mesma cor! Escolha outra.", "warning");
-               return;
-            }
+  
+  function onMouseUp() { isDragging.value = false; isSelecting.value = false; }
+  </script>
+  
+  <template>
+    <div class="canvas-wrapper">
+      <div class="side-hud" :class="{ minimized: isHudMinimized }">
+        <button class="toggle-btn" @click="isHudMinimized = !isHudMinimized">
+          <ChevronRight v-if="!isHudMinimized" /><ChevronLeft v-else />
+        </button>
+  
+        <div class="hud-inner custom-scroll">
+          <div class="section">
+            <span class="label">Cor Ativa</span>
+            <div class="color-row">
+              <input type="color" ref="colorPickerInput" @change="handleColorPicked" style="position:absolute; opacity:0; pointer-events:none;" />
+              <div class="color-block" :style="{ background: activeColorHex }" @click="colorPickerInput.click()"></div>
+              <button @click="currentTool = 'picker'" :class="{ active: currentTool === 'picker' }"><Pipette :size="18" /></button>
+            </div>
+          </div>
+  
+          <div class="divider"></div>
+  
+          <div class="section">
+            <span class="label">Ferramentas</span>
+            <div class="grid-tools">
+              <button @click="currentTool = 'brush'" :class="{ active: currentTool === 'brush' }" title="Pincel"><Pencil :size="20" /></button>
+              <button @click="currentTool = 'bucket'" :class="{ active: currentTool === 'bucket' }" title="Balde"><PaintBucket :size="20" /></button>
+              <button @click="currentTool = 'select'" :class="{ active: currentTool === 'select' }" title="Seleção"><SquareDashedMousePointer :size="20" /></button>
+              <button @click="refresh" title="Undo"><Undo :size="20" /></button>
+            </div>
+          </div>
+  
+          <div class="divider"></div>
+  
+          <div class="section">
+            <button @click="toggleRuler" :class="{ active: currentTool === 'ruler' || highlightedRow !== -1 }" class="wide-btn">
+              <Ruler :size="18" /> <span>Régua</span>
+            </button>
             
-            // SUBSTITUÍDO: confirm() por showConfirm()
-            const confirmed = await showConfirm("Unir essas cores permanentemente?");
-            
-            if (confirmed) {
-               await mergeColors(mergeState.value.sourceIndex, clickedIndex);
-               mergeState.value.isActive = false;
-               mergeState.value.sourceIndex = null;
-               showToast("Cores unidas!", "success");
-               refresh();
-            }
-        }
-        return; 
-    }
-    // ============================================
-
-    // 2. Comportamento Normal (Régua)
-    if (currentTool.value === 'ruler') {
-      const row = gridY + 1;
-      highlightedRow.value = (highlightedRow.value === row) ? -1 : row;
-      return;
-    }
-
-    const clickedIndex = await getPixelIndex(gridX, gridY);
-    if (clickedIndex === -1) return;
+            <div v-if="highlightedRow !== -1" class="ruler-panel">
+               <div class="nav-row">
+                  <button @click="moveRow(1)" class="nav-btn"><ChevronUp :size="20" /></button>
+                  <div class="row-num">
+                    <small>CARR.</small><strong>{{ highlightedRow }}</strong>
+                  </div>
+                  <button @click="moveRow(-1)" class="nav-btn"><ChevronDown :size="20" /></button>
+               </div>
   
-    // 3. Ferramentas de Edição
-    if (currentTool.value === 'brush') {
-      await paintCell(gridX, gridY);
-      refresh();
-    } else if (currentTool.value === 'picker') {
-      activeColorIndex.value = clickedIndex;
-      currentTool.value = 'brush';
-      showToast("Cor selecionada!", "info");
-    } else if (currentTool.value === 'swap') {
-      selectedIndexForSwap.value = clickedIndex;
-      colorPickerInput.value.click();
-    } else if (currentTool.value === 'bucket') {
-      const targetColor = activeColorIndex.value; 
-      const sourceColor = clickedIndex; 
-      if (targetColor === sourceColor) return; 
-      
-      if (selectionRect.value) {
-          const isInside = gridX >= selectionRect.value.x && gridX < selectionRect.value.x + selectionRect.value.w && gridY >= selectionRect.value.y && gridY < selectionRect.value.y + selectionRect.value.h;
-          if (isInside) {
-              await replaceColorInRegion(selectionRect.value.x, selectionRect.value.y, selectionRect.value.w, selectionRect.value.h, sourceColor, targetColor);
-              refresh();
-          } else {
-              showToast("Clique DENTRO da seleção para usar o balde.", "warning");
-          }
-      } else {
-          // SUBSTITUÍDO: confirm() por showConfirm()
-          const confirmed = await showConfirm("Substituir essa cor na imagem INTEIRA?");
-          if(confirmed) {
-             await mergeColors(sourceColor, targetColor);
-             showToast("Cores substituídas!", "success");
-             refresh();
-          }
-      }
-    }
-  }
+               <div v-if="rowSummary.length" class="summary-box">
+                  <div class="dir-header" :class="{ 'dir-left': highlightedRow % 2 !== 0, 'dir-right': highlightedRow % 2 === 0 }">
+                    <ArrowLeft v-if="highlightedRow % 2 !== 0" :size="20" stroke-width="2.5" />
+                    <ArrowRight v-else :size="20" stroke-width="2.5" />
+                  </div>
   
-  async function undo() { await undoLastAction(); refresh(); showToast("Desfeito!", "info"); }
-  function nextRow() { highlightedRow.value += 1; }
-  function prevRow() { if (highlightedRow.value > 1) highlightedRow.value -= 1; }
-  function toggleRulerTool() { currentTool.value = (currentTool.value === 'ruler') ? 'brush' : 'ruler'; }
-  function clearSelection() { selectionRect.value = null; }
-
-  async function onColorPicked(e) {
-    const newHex = e.target.value;
-    if (selectedIndexForSwap.value !== -1) {
-      try { 
-          await replaceColor(selectedIndexForSwap.value, newHex); 
-          refresh(); 
-          showToast("Cor trocada com sucesso!", "success");
-      } 
-      finally { selectedIndexForSwap.value = -1; e.target.value = null; }
-    }
-  }
-</script>
+                  <div class="pills-list">
+                    <div v-for="(item, idx) in rowSummary" :key="idx" class="pill">
+                      <div class="dot" :style="{ background: item.hex }"></div>
+                      <span>{{ item.count }}</span>
+                    </div>
+                  </div>
+               </div>
+            </div>
   
-<template>
-  <div class="canvas-wrapper">
-    <input type="color" ref="colorPickerInput" style="display: none" @change="onColorPicked" @click.stop />
-
-    <div v-if="mergeState.isActive" class="merge-overlay-warning">
-       <span v-if="mergeState.sourceIndex === null">👆 Clique na cor para <strong>REMOVER</strong></span>
-       <span v-else>🎯 Clique na cor de <strong>DESTINO</strong></span>
-    </div>
-
-    <div class="tools-hud">
-      <button @click="undo" title="Desfazer" class="action-btn">↩️</button>
-      <div class="separator"></div>
-      <button @click="toggleRulerTool" :class="{ active: currentTool === 'ruler' }" title="Régua">📏</button>
-      <div v-if="currentTool === 'ruler'" class="row-controls">
-         <button @click="prevRow" class="btn-row">⬆️</button>
-         <span class="row-display">{{ highlightedRow > 0 ? 'L: ' + highlightedRow : '---' }}</span>
-         <button @click="nextRow" class="btn-row">⬇️</button>
+            <div v-if="selectionRect" class="selection-status">
+              <span>Seleção Ativa</span>
+              <button @click="selectionRect = null" class="btn-close-sel"><X :size="14" /></button>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="separator" v-if="currentTool === 'ruler'"></div>
-      <template v-if="currentTool !== 'ruler'">
-          <div class="smart-tool-group">
-            <button v-if="currentTool !== 'brush' && currentTool !== 'bucket' && currentTool !== 'select'" @click="currentTool = 'picker'" class="btn-smart">💧 Cor</button>
-            <button v-else @click="currentTool = 'picker'" class="btn-smart active"><span class="dot" :style="{ backgroundColor: activeColorHex }"></span></button>
+  
+      <div class="canvas" @mousedown="onMouseDown" @mousemove="onMouseMove" @mouseup="onMouseUp" @mouseleave="onMouseUp">
+        <div class="transform-container" :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, transformOrigin: '0 0' }">
+          <img v-if="imageSrc" id="grid-canvas" :src="imageSrc" @click="handleClick" draggable="false" class="pixel-art" />
+          <div v-if="selectionRect" class="selection-overlay" 
+               :style="{ left: (BACKEND_MARGIN + selectionRect.x * CELL_SIZE) + 'px', top: (BACKEND_MARGIN + selectionRect.y * CELL_SIZE) + 'px', width: (selectionRect.w * CELL_SIZE) + 'px', height: (selectionRect.h * CELL_SIZE) + 'px' }">
           </div>
-          <div class="selection-group">
-             <button @click="currentTool = 'select'" :class="{ active: currentTool === 'select' }" title="Seleção">⛝</button>
-             <button v-if="selectionRect" @click="clearSelection" class="btn-clear-sel">✖</button>
-          </div>
-          <div class="mode-toggle">
-             <button @click="currentTool = 'brush'" :class="{ active: currentTool === 'brush' }" title="Pincel">✏️</button>
-             <button @click="currentTool = 'bucket'" :class="{ active: currentTool === 'bucket' }" title="Balde">🪣</button>
-          </div>
-          <button @click="currentTool = 'swap'" :class="{ active: currentTool === 'swap' }" title="Trocar Hex">🔄</button>
-      </template>
-      <button v-else @click="currentTool = 'brush'" class="btn-edit-mode">🛠️ Editar</button>
-      <div class="separator"></div>
-      <div class="zoom-indicator">{{ Math.round(zoom * 100) }}%</div>
-    </div>
-
-    <div class="canvas" 
-         :style="{ cursor: mergeState.isActive ? 'alias' : (currentTool === 'select' ? 'crosshair' : 'default') }"
-         @wheel.prevent="handleWheel" 
-         @mousedown="onMouseDown" 
-         @mousemove="onMouseMove" 
-         @mouseup="onMouseUp"
-         @mouseleave="onMouseUp"
-         @contextmenu.prevent>
-         
-      <div class="transform-container" 
-           :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, transformOrigin: 'top left' }">
-           <img v-if="imageSrc" :src="imageSrc" @click="handleClick" draggable="false" class="pixel-art" />
-           <div v-if="selectionRect" class="selection-overlay" :style="{ left: (50 + selectionRect.x * 22) + 'px', top: (50 + selectionRect.y * 22) + 'px', width: (selectionRect.w * 22) + 'px', height: (selectionRect.h * 22) + 'px' }"></div>
+        </div>
       </div>
-      <div v-if="!imageSrc" class="placeholder">Carregue uma imagem</div>
     </div>
-  </div>
-</template>
-
-<style scoped>
-/* (O CSS mantém-se idêntico ao original, garantindo o visual que já funcionava) */
-.merge-overlay-warning { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(230, 126, 34, 0.9); color: white; padding: 10px 20px; border-radius: 30px; font-weight: bold; z-index: 200; pointer-events: none; box-shadow: 0 4px 15px rgba(0,0,0,0.5); animation: pulse 2s infinite; }
-@keyframes pulse { 0% { opacity: 0.8; } 50% { opacity: 1; transform: translateX(-50%) scale(1.05); } 100% { opacity: 0.8; } }
-.canvas-wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; background: #111; }
-.canvas { width: 100%; height: 100%; }
-.transform-container { position: absolute; top: 0; left: 0; pointer-events: none; }
-.transform-container > * { pointer-events: auto; }
-.pixel-art { image-rendering: pixelated; }
-.selection-overlay { position: absolute; border: 2px dashed #f1c40f; background-color: rgba(241, 196, 15, 0.15); box-shadow: 0 0 4px rgba(0,0,0,0.8); pointer-events: none; z-index: 10; }
-.tools-hud { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: rgba(30, 30, 30, 0.95); padding: 8px 15px; border-radius: 40px; display: flex; gap: 10px; align-items: center; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid #444; backdrop-filter: blur(5px); }
-.tools-hud button { background: transparent; border: none; font-size: 1.2rem; cursor: pointer; padding: 6px; border-radius: 50%; transition: all 0.2s; color: #ccc; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; }
-.tools-hud button:hover { background: rgba(255,255,255,0.1); color: white; transform: translateY(-2px); }
-.tools-hud button.active { background: #e67e22; color: white; box-shadow: 0 0 10px rgba(230, 126, 34, 0.4); }
-.selection-group { display: flex; gap: 2px; background: #222; border-radius: 20px; padding: 0 4px; align-items: center; }
-.btn-clear-sel { color: #e74c3c !important; font-size: 1rem !important; font-weight: bold; width: 28px !important; height: 28px !important; }
-.btn-clear-sel:hover { background: rgba(231, 76, 60, 0.2) !important; }
-.row-controls { display: flex; align-items: center; gap: 5px; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 20px; }
-.row-display { font-family: monospace; font-size: 1rem; color: #f1c40f; font-weight: bold; min-width: 40px; text-align: center; }
-.btn-row { font-size: 1rem !important; width: 30px !important; height: 30px !important; }
-.btn-smart { border-radius: 20px !important; width: auto !important; padding: 0 12px !important; font-size: 0.9rem !important; font-weight: bold; gap: 5px; }
-.btn-smart.active { background: #e67e22 !important; }
-.dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; }
-.mode-toggle { display: flex; background: #222; border-radius: 20px; padding: 2px; }
-.separator { width: 1px; height: 20px; background: #555; }
-.zoom-indicator { font-size: 0.75rem; color: #888; margin-left: 5px; }
-.placeholder { color: #555; text-align: center; margin-top: 30vh; font-size: 1.2rem; }
-.btn-edit-mode { font-size: 0.8rem !important; width: auto !important; border-radius: 20px !important; padding: 0 10px !important; }
-</style>
+  </template>
+  
+  <style scoped>
+  .canvas-wrapper { position: relative; width: 100%; height: 100%; background: #0b0b0b; overflow: hidden; }
+  
+  /* HUD MAIS BAIXO (130px) */
+  .side-hud { 
+    position: absolute; right: 20px; top: 200px; width: 165px; 
+    background: rgba(30, 30, 31, 0.95); backdrop-filter: blur(10px); 
+    border: 1px solid #444; border-radius: 16px; z-index: 900; 
+    transition: all 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+  }
+  .side-hud.minimized { width: 50px; right: -5px; }
+  .side-hud.minimized .hud-inner { opacity: 0; pointer-events: none; }
+  
+  .toggle-btn { position: absolute; left: -12px; top: 20px; width: 24px; height: 24px; background: #e67e22; border: none; border-radius: 50%; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .hud-inner { padding: 15px; display: flex; flex-direction: column; gap: 12px; max-height: 70vh; overflow-y: auto; }
+  .section { display: flex; flex-direction: column; gap: 8px; }
+  .label { font-size: 0.6rem; text-transform: uppercase; color: #777; font-weight: 800; }
+  
+  .color-row { display: flex; gap: 8px; align-items: center; }
+  .color-block { width: 44px; height: 44px; border-radius: 8px; border: 2px solid #555; cursor: pointer; }
+  .grid-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  button { background: #252526; border: 1px solid #333; color: #ccc; border-radius: 8px; height: 38px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+  button:hover { background: #333; color: white; }
+  button.active { background: #e67e22; border-color: #ff9d42; color: white; }
+  .wide-btn { width: 100%; gap: 10px; font-weight: 600; font-size: 0.8rem; }
+  
+  /* PAINEL DA RÉGUA */
+  .ruler-panel { background: rgba(0,0,0,0.3); border-radius: 8px; padding: 8px; margin-top: 5px; border: 1px solid #333; }
+  .nav-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .nav-btn { width: 30px; height: 30px; background: #1a1a1a; border: 1px solid #444; color: #e67e22; border-radius: 6px; }
+  .row-num { text-align: center; line-height: 1; color: white; }
+  .row-num small { font-size: 0.5rem; color: #888; display: block; }
+  
+  /* SÓ SETA (Direção) */
+  .dir-header { display: flex; align-items: center; justify-content: center; padding: 6px; border-radius: 4px; margin-bottom: 8px; }
+  .dir-left { background: rgba(52, 152, 219, 0.2); color: #3498db; }
+  .dir-right { background: rgba(230, 126, 34, 0.2); color: #e67e22; }
+  
+  .pills-list { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+  .pill { display: flex; align-items: center; gap: 5px; background: #252526; padding: 3px 8px; border-radius: 12px; border: 1px solid #444; color: white; font-size: 0.75rem; font-weight: bold; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.3); }
+  
+  .divider { height: 1px; background: #333; }
+  .selection-status { background: rgba(230, 126, 34, 0.1); border: 1px solid rgba(230, 126, 34, 0.3); border-radius: 8px; padding: 6px 10px; font-size: 0.7rem; color: #e67e22; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
+  .btn-close-sel { background: transparent; border: none; color: #e74c3c; width: auto; height: auto; }
+  .canvas { width: 100%; height: 100%; cursor: crosshair; }
+  .pixel-art { image-rendering: pixelated; }
+  .selection-overlay { position: absolute; border: 2px dashed #f1c40f; background: rgba(241, 196, 15, 0.1); pointer-events: none; }
+  .custom-scroll::-webkit-scrollbar { width: 3px; }
+  .custom-scroll::-webkit-scrollbar-thumb { background: #444; }
+  </style>

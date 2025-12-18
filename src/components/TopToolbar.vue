@@ -176,15 +176,65 @@
   box-sizing: border-box;
 }
 
-.user-menu { position: absolute; top: 55px; right: 0; width: 220px; background: #252526; border: 1px solid #444; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); overflow: hidden; z-index: 202; padding: 5px 0; }
-.menu-header { padding: 15px 20px; background: #2c2c2c; border-bottom: 1px solid #333; }
-.name { margin: 0; font-weight: bold; color: white; font-size: 0.95rem; }
-.email { margin: 2px 0 0 0; color: #888; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.menu-item { display: block; padding: 10px 20px; color: #ccc; text-decoration: none; font-size: 0.9rem; transition: background 0.2s; border: none; background: transparent; width: 100%; text-align: left; cursor: pointer; box-sizing: border-box; }
+.user-menu { 
+  position: absolute; 
+  top: 50px; /* Subiu um pouco (era 55px) */
+  right: 0; 
+  width: 180px; /* Reduzido de 220px para 180px */
+  background: #252526; 
+  border: 1px solid #444; 
+  border-radius: 8px; /* Cantos menos arredondados para economizar espaço visual */
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5); 
+  overflow: hidden; 
+  z-index: 9999; /* Z-Index bem alto para garantir */
+  padding: 4px 0; 
+}
+
+/* CABEÇALHO DO MENU COMPACTO */
+.menu-header { 
+  padding: 10px 15px; /* Reduzido o padding */
+  background: #2c2c2c; 
+  border-bottom: 1px solid #333; 
+}
+.name { 
+  margin: 0; 
+  font-weight: bold; 
+  color: white; 
+  font-size: 0.85rem; /* Fonte menor */
+}
+.email { 
+  margin: 0; 
+  color: #888; 
+  font-size: 0.7rem; /* Email bem pequeno */
+  white-space: nowrap; 
+  overflow: hidden; 
+  text-overflow: ellipsis; 
+}
+
+/* ITENS DO MENU MAIS BAIXOS */
+.menu-item { 
+  display: block; 
+  padding: 8px 15px; /* Altura do item reduzida */
+  color: #ccc; 
+  text-decoration: none; 
+  font-size: 0.8rem; /* Fonte menor */
+  transition: background 0.2s; 
+  border: none; 
+  background: transparent; 
+  width: 100%; 
+  text-align: left; 
+  cursor: pointer; 
+}
 .menu-item:hover { background: #333; color: white; }
+
 .menu-item.danger { color: #e74c3c; }
 .menu-item.danger:hover { background: rgba(231, 76, 60, 0.1); }
-.menu-divider { height: 1px; background: #333; margin: 5px 0; }
+
+.menu-divider { 
+  height: 1px; 
+  background: #333; 
+  margin: 3px 0; /* Margem reduzida */
+}
 .menu-backdrop { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 201; cursor: default; }
 .btn-login { background: #e67e22; color: white; text-decoration: none; padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; transition: 0.2s; }
 .btn-login:hover { background: #d35400; transform: translateY(-1px); }

@@ -1,5 +1,10 @@
 fastapi
 uvicorn[standard]
-pillow
 python-multipart
+pillow
 stripe
+python-dotenv
+supabase
+pydantic
+reportlab
+reportlab==4.2.2

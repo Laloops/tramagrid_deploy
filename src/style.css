@@ -45,3 +45,42 @@ a:hover {
 button {
   font-family: inherit;
 }
+
+/* Coloque isso no seu style.css global ou App.vue (sem ser scoped) */
+
+html.lenis, html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-scrolling iframe {
+  pointer-events: none;
+}
+
+/* O MAIS IMPORTANTE: Garanta que o body não esteja travado */
+html, body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden; /* Esconde barra horizontal se vazar algo */
+  /* NUNCA USE overflow: hidden ou height: 100vh aqui se for usar Lenis */
+}
+
+#app {
+  /* O Vue as vezes coloca display: grid/flex e height 100vh aqui. TIRA! */
+  width: 100%;
+  min-height: 100vh;
+  overflow: visible; /* Deixe o conteúdo fluir */
+}

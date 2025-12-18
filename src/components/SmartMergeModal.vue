@@ -127,24 +127,32 @@
   
   <style scoped>
   /* Painel Flutuante Estilizado */
-  .smart-panel {
+  /* */
+.smart-panel {
     position: fixed;
     top: 50%;           
-    right: 100px; /* Afastado da sidebar */
-    transform: translateY(-50%); 
+    left: 50%; /* Centraliza horizontalmente */
+    transform: translate(-50%, -50%); /* Ajuste fino para o centro exato */
     
-    width: 320px; 
-    max-height: 70vh;
+    width: 90%; 
+    max-width: 360px; /* Largura boa para PC e Celular */
+    max-height: 80vh;
     
-    background: #1e1e1e; /* Cor padrão do tema */
+    background: #1e1e1e;
     border: 1px solid #444; 
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
-    display: flex; flex-direction: column;
-    z-index: 2000; 
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+    display: flex; 
+    flex-direction: column;
+    z-index: 9999; /* ACIMA DE TUDO */
     color: #ddd;
-    animation: slideIn 0.3s ease-out;
-  }
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translate(-50%, -45%); }
+    to { opacity: 1; transform: translate(-50%, -50%); }
+}
   
   @keyframes slideIn {
       from { opacity: 0; transform: translateY(-40%); }

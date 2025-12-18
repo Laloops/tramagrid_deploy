@@ -1,9 +1,15 @@
 <script setup>
-  import { onMounted } from 'vue'
+  import { computed, onMounted } from 'vue'
   import { supabase } from './supabase'
   import TopToolbar from './components/TopToolbar.vue'
   import ToastContainer from './components/ToastContainer.vue' 
-  
+  import { useRoute } from 'vue-router'
+  const route = useRoute()
+
+  const showTopBar = computed(() => {
+    return route.path !== '/'
+  })
+
   onMounted(() => {
     // Escuta mudanças de autenticação globais
     supabase.auth.onAuthStateChange((event, session) => {
@@ -19,7 +25,7 @@
   
 <template>
   <div class="app-layout">
-    <TopToolbar />
+    <TopToolbar v-if="showTopBar" />
     
     <router-view />
     
@@ -33,7 +39,6 @@
   flex-direction: column;
   height: 100vh;
   width: 100vw;
-  overflow: hidden; /* Impede scroll duplo com o Dashboard */
   background-color: #121212; /* Fundo base para evitar flashes brancos */
 }
 </style>
