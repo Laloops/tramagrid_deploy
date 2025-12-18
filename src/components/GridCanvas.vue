@@ -25,6 +25,7 @@
   const BACKEND_MARGIN = 20; 
   const CELL_SIZE = 22;
   
+  // === VARIÁVEIS DO CANVAS ===
   const panX = ref(0), panY = ref(0);
   const isDragging = ref(false);
   const dragStart = ref({ x: 0, y: 0 });
@@ -32,6 +33,41 @@
   const selectionRect = ref(null); 
   const isSelecting = ref(false);
   const selStart = ref({ x: 0, y: 0 });
+
+  // === NOVA LÓGICA: ARRASTAR O HUD (CAIXA DE FERRAMENTAS) ===
+  // Posição inicial (ex: canto direito)
+  const hudPos = ref({ x: window.innerWidth - 190, y: 200 }); 
+  const isHudDragging = ref(false);
+  const hudDragOffset = ref({ x: 0, y: 0 });
+
+  function startHudDrag(e) {
+    // Não arrasta se clicar em botões ou inputs dentro da caixa
+    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.color-block')) return;
+
+    isHudDragging.value = true;
+    hudDragOffset.value = {
+      x: e.clientX - hudPos.value.x,
+      y: e.clientY - hudPos.value.y
+    };
+    
+    // Listeners globais para o HUD não "soltar" se mover rápido
+    window.addEventListener('mousemove', onHudDrag);
+    window.addEventListener('mouseup', stopHudDrag);
+  }
+
+  function onHudDrag(e) {
+    if (!isHudDragging.value) return;
+    hudPos.value = {
+      x: e.clientX - hudDragOffset.value.x,
+      y: e.clientY - hudDragOffset.value.y
+    };
+  }
+
+  function stopHudDrag() {
+    isHudDragging.value = false;
+    window.removeEventListener('mousemove', onHudDrag);
+    window.removeEventListener('mouseup', stopHudDrag);
+  }
   
   const activeColorHex = computed(() => {
     const color = fullPalette.value.find(c => c.index === activeColorIndex.value);
@@ -64,6 +100,9 @@
   
   onUnmounted(() => {
     eventBus.removeEventListener('refresh', refresh);
+    // Limpeza de segurança
+    window.removeEventListener('mousemove', onHudDrag);
+    window.removeEventListener('mouseup', stopHudDrag);
   });
   
   function moveRow(delta) {
@@ -176,8 +215,13 @@
   
   <template>
     <div class="canvas-wrapper">
-      <div class="side-hud" :class="{ minimized: isHudMinimized }">
-        <button class="toggle-btn" @click="isHudMinimized = !isHudMinimized">
+      <div 
+        class="side-hud" 
+        :class="{ minimized: isHudMinimized }"
+        :style="{ left: hudPos.x + 'px', top: hudPos.y + 'px' }"
+        @mousedown="startHudDrag"
+      >
+        <button class="toggle-btn" @click.stop="isHudMinimized = !isHudMinimized">
           <ChevronRight v-if="!isHudMinimized" /><ChevronLeft v-else />
         </button>
   
@@ -256,14 +300,26 @@
   <style scoped>
   .canvas-wrapper { position: relative; width: 100%; height: 100%; background: #0b0b0b; overflow: hidden; }
   
-  /* HUD MAIS BAIXO (130px) */
+  /* HUD - CSS AJUSTADO PARA MOVER */
   .side-hud { 
-    position: absolute; right: 20px; top: 200px; width: 165px; 
+    position: fixed; 
+    /* Right e Top removidos aqui pois são controlados pelo JS (style inline) */
+    width: 165px; 
     background: rgba(30, 30, 31, 0.95); backdrop-filter: blur(10px); 
     border: 1px solid #444; border-radius: 16px; z-index: 900; 
-    transition: all 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+    transition: width 0.3s; /* Removi transição de posição para não dar lag ao arrastar */
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+    cursor: move; /* Cursor de movimento */
+    user-select: none;
   }
-  .side-hud.minimized { width: 50px; right: -5px; }
+  
+  /* Quando minimizado, apenas encolhe a largura */
+  .side-hud.minimized { 
+    width: 50px; 
+    /* Removi 'right: -5px' para não pular de lugar */
+    overflow: hidden;
+  }
+  
   .side-hud.minimized .hud-inner { opacity: 0; pointer-events: none; }
   
   .toggle-btn { position: absolute; left: -12px; top: 20px; width: 24px; height: 24px; background: #e67e22; border: none; border-radius: 50%; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; }
