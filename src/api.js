@@ -1,7 +1,9 @@
 import { ref } from 'vue'
 
 // Definição da URL base da API
-export const API_BASE = import.meta.env.VITE_API_URL || 'https://www.tramagrid.com.br'
+const RENDER_URL = 'https://tramagrid-api.onrender.com';
+
+export const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5000' : RENDER_URL);
 
 // --- ESTADO GLOBAL ---
 export const sessionId = ref('') 
