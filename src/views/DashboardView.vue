@@ -12,6 +12,7 @@
     eventBus
   } from "../api.js";
   import { showToast, showConfirm } from "../toast.js";
+  import { getDeviceFingerprint } from '../utils/fingerprint'
   
   const router = useRouter();
   const projects = ref([]);
@@ -29,6 +30,8 @@
     const email = userProfile.value?.email || "";
     return email.split("@")[0] || "Artista";
   });
+
+  // (O código que estava aqui foi movido para dentro de createNewGrid abaixo)
   
   onMounted(async () => {
     await fetchUserData();
@@ -138,9 +141,29 @@
     try {
       const user = userProfile.value;
       if (!user) throw new Error("Sessão expirada. Entre novamente.");
+
+      // --- INÍCIO DA CORREÇÃO: Lógica de Segurança inserida aqui ---
+      if (hasFreeGeneration.value) {
+        const deviceId = await getDeviceFingerprint()
+        
+        const { data: usage } = await supabase
+          .from('device_fingerprints')
+          .select('*')
+          .eq('fingerprint_hash', deviceId)
+          .maybeSingle() // Usei maybeSingle para evitar erro se não existir
+
+        if (usage) {
+          showToast('Esta máquina já utilizou a cota gratuita.', 'error')
+          uploadLoading.value = false; // Reseta o botão
+          return // Bloqueia a ação
+        }
+        
+        // Salva que essa máquina usou agora (sem else, pois o return acima encerra)
+        await supabase.from('device_fingerprints').insert([{ fingerprint_hash: deviceId }])
+      }
+      // --- FIM DA CORREÇÃO ---
   
       // 1. CONSUMIR CRÉDITO NO BACKEND
-      // Chamamos a mesma rota usada na HomeView para garantir que o saldo seja reduzido
       const res = await fetch(`${API_BASE}/api/consume-credit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

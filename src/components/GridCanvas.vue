@@ -25,23 +25,22 @@
   const BACKEND_MARGIN = 20; 
   const CELL_SIZE = 22;
   
-  // === VARIÁVEIS DO CANVAS ===
+  // === VARIÁVEIS DO CANVAS (ZOOM E PAN) ===
   const panX = ref(0), panY = ref(0);
   const isDragging = ref(false);
   const dragStart = ref({ x: 0, y: 0 });
+  const isSpacePressed = ref(false); // Controle da tecla Espaço
   
   const selectionRect = ref(null); 
   const isSelecting = ref(false);
   const selStart = ref({ x: 0, y: 0 });
 
-  // === NOVA LÓGICA: ARRASTAR O HUD (CAIXA DE FERRAMENTAS) ===
-  // Posição inicial (ex: canto direito)
+  // === ARRASTAR O HUD (CAIXA DE FERRAMENTAS) ===
   const hudPos = ref({ x: window.innerWidth - 190, y: 200 }); 
   const isHudDragging = ref(false);
   const hudDragOffset = ref({ x: 0, y: 0 });
 
   function startHudDrag(e) {
-    // Não arrasta se clicar em botões ou inputs dentro da caixa
     if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.color-block')) return;
 
     isHudDragging.value = true;
@@ -49,8 +48,6 @@
       x: e.clientX - hudPos.value.x,
       y: e.clientY - hudPos.value.y
     };
-    
-    // Listeners globais para o HUD não "soltar" se mover rápido
     window.addEventListener('mousemove', onHudDrag);
     window.addEventListener('mouseup', stopHudDrag);
   }
@@ -93,18 +90,59 @@
     refresh();
   });
   
+  // === CONTROLES DE TECLADO (ESPAÇO PARA ARRASTAR) ===
+  function handleKeyDown(e) {
+    if (e.code === 'Space' && !isSpacePressed.value) {
+      isSpacePressed.value = true;
+    }
+  }
+
+  function handleKeyUp(e) {
+    if (e.code === 'Space') {
+      isSpacePressed.value = false;
+      isDragging.value = false; // Para o arraste se soltar o espaço
+    }
+  }
+
   onMounted(() => {
     refresh();
     eventBus.addEventListener('refresh', refresh);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
   });
   
   onUnmounted(() => {
     eventBus.removeEventListener('refresh', refresh);
-    // Limpeza de segurança
     window.removeEventListener('mousemove', onHudDrag);
     window.removeEventListener('mouseup', stopHudDrag);
+    window.removeEventListener('keydown', handleKeyDown);
+    window.removeEventListener('keyup', handleKeyUp);
   });
   
+  // === LÓGICA DE ZOOM (RODA DO MOUSE) ===
+  function handleWheel(e) {
+    e.preventDefault(); // Impede o scroll da página
+
+    const zoomIntensity = 0.1;
+    const direction = e.deltaY < 0 ? 1 : -1;
+    // Calcula novo zoom com limites
+    const newZoom = Math.max(0.1, Math.min(10.0, zoom.value + (direction * zoomIntensity * zoom.value)));
+
+    // Lógica para dar zoom na direção do mouse (focar onde aponta)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Coordenada do mouse no "mundo" (imagem) antes do zoom
+    const worldX = (mouseX - panX.value) / zoom.value;
+    const worldY = (mouseY - panY.value) / zoom.value;
+
+    // Atualiza zoom e ajusta Pan para manter o ponto do mouse estável
+    panX.value = mouseX - worldX * newZoom;
+    panY.value = mouseY - worldY * newZoom;
+    zoom.value = newZoom;
+  }
+
   function moveRow(delta) {
     const imgEl = document.getElementById('grid-canvas');
     if (!imgEl) return;
@@ -120,6 +158,7 @@
     const canvasEl = document.querySelector('.canvas'); 
     if (!canvasEl) return { gridX: -1, gridY: -1 };
     const rect = canvasEl.getBoundingClientRect();
+    // Ajuste da fórmula para considerar o zoom e pan atuais
     const relX = (clientX - rect.left - panX.value) / zoom.value;
     const relY = (clientY + 2 - rect.top - panY.value) / zoom.value;
     const gridX = Math.floor((relX - BACKEND_MARGIN) / CELL_SIZE);
@@ -128,7 +167,7 @@
   }
   
   async function handleClick(e) {
-    if (isDragging.value || isSelecting.value) return; 
+    if (isDragging.value || isSelecting.value || isSpacePressed.value) return; 
     const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
     if (gridX < 0 || gridY < 0) return; 
   
@@ -183,7 +222,8 @@
   }
   
   function onMouseDown(e) {
-    if (e.button === 1) { 
+    // Permite arrastar se for botão do meio (1) OU botão esquerdo (0) com Espaço apertado
+    if (e.button === 1 || (e.button === 0 && isSpacePressed.value)) { 
       isDragging.value = true;
       dragStart.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
       return;
@@ -286,7 +326,15 @@
         </div>
       </div>
   
-      <div class="canvas" @mousedown="onMouseDown" @mousemove="onMouseMove" @mouseup="onMouseUp" @mouseleave="onMouseUp">
+      <div 
+        class="canvas" 
+        @mousedown="onMouseDown" 
+        @mousemove="onMouseMove" 
+        @mouseup="onMouseUp" 
+        @mouseleave="onMouseUp"
+        @wheel="handleWheel"
+        :style="{ cursor: isSpacePressed || isDragging ? 'grab' : 'crosshair' }"
+      >
         <div class="transform-container" :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, transformOrigin: '0 0' }">
           <img v-if="imageSrc" id="grid-canvas" :src="imageSrc" @click="handleClick" draggable="false" class="pixel-art" />
           <div v-if="selectionRect" class="selection-overlay" 
@@ -354,7 +402,10 @@
   .divider { height: 1px; background: #333; }
   .selection-status { background: rgba(230, 126, 34, 0.1); border: 1px solid rgba(230, 126, 34, 0.3); border-radius: 8px; padding: 6px 10px; font-size: 0.7rem; color: #e67e22; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
   .btn-close-sel { background: transparent; border: none; color: #e74c3c; width: auto; height: auto; }
-  .canvas { width: 100%; height: 100%; cursor: crosshair; }
+  
+  /* CANVAS: sem cursor fixo aqui, usamos style binding no template */
+  .canvas { width: 100%; height: 100%; }
+  
   .pixel-art { image-rendering: pixelated; }
   .selection-overlay { position: absolute; border: 2px dashed #f1c40f; background: rgba(241, 196, 15, 0.1); pointer-events: none; }
   .custom-scroll::-webkit-scrollbar { width: 3px; }

@@ -24,6 +24,9 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import ImageReader, simpleSplit
 from datetime import datetime
 
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
 # ================= CONFIGURAÇÃO DE AMBIENTE =================
 env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -358,9 +361,130 @@ class TramaGridSession:
             if len(grp) > 1: visited.add(idx1); groups.append(grp)
         return groups
 
+# --- MODELOS DO BLOG ---
+class BlogPostModel(BaseModel):
+    title: str
+    slug: str
+    content: str
+    image_url: str
+    excerpt: str
+    published: bool = True
+
+# --- ROTAS DO BLOG (Adicione junto com as outras rotas @app) ---
+
+# 1. LISTAR POSTS (Público)
+@app.get("/api/posts")
+def get_posts():
+    # Retorna posts mais recentes primeiro
+    res = supabase_admin.table('posts').select('*').eq('published', True).order('created_at', desc=True).execute()
+    return res.data
+
+# 2. LER UM POST (Público)
+@app.get("/api/posts/{slug}")
+def get_post(slug: str):
+    res = supabase_admin.table('posts').select('*').eq('slug', slug).single().execute()
+    if not res.data: raise HTTPException(404, "Post não encontrado")
+    return res.data
+
+# 3. CRIAR POST (Admin)
+@app.post("/api/posts")
+def create_post(post: BlogPostModel):
+    # Aqui você poderia verificar se o usuário é admin, mas como é MVP,
+    # vamos confiar que a rota só é chamada pelo painel protegido do Vue.
+    try:
+        data = post.dict()
+        res = supabase_admin.table('posts').insert(data).execute()
+        return {"ok": True, "data": res.data}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+# 4. DELETAR POST (Admin)
+@app.delete("/api/posts/{id}")
+def delete_post(id: int):
+    try:
+        supabase_admin.table('posts').delete().eq('id', id).execute()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    
+
+    # ... (imports existentes)
+
+# === ROTA DE ESTATÍSTICAS DO ADMIN ===
+@app.get("/api/admin/stats")
+def get_admin_stats():
+    try:
+        # Conta Usuários (Profiles)
+        res_users = supabase_admin.table('profiles').select('id', count='exact').execute()
+        count_users = res_users.count if res_users.count else 0
+        
+        # Conta Projetos
+        res_projects = supabase_admin.table('projects').select('id', count='exact').execute()
+        count_projects = res_projects.count if res_projects.count else 0
+        
+        # Mock para dados que ainda não temos rastreamento
+        # (Visitantes e Logins precisariam de uma tabela de analytics)
+        return {
+            "total_users": count_users,
+            "total_projects": count_projects,
+            "daily_visits": 142,      # Placeholder
+            "daily_logins": 28,       # Placeholder
+            "new_subs": 3             # Placeholder
+        }
+    except Exception as e:
+        print(f"Erro stats: {e}")
+        return {"total_users": 0, "total_projects": 0, "daily_visits": 0}
+
+# === Adicione esta nova rota junto com o track_visit ===
+@app.post("/api/track/login")
+def track_login():
+    try:
+        if supabase_admin:
+            supabase_admin.rpc('increment_login').execute()
+        return {"ok": True}
+    except Exception as e:
+        print(f"Erro tracking login: {e}")
+        return {"ok": False}
+
+# === Atualize a rota get_admin_stats para ler os logins reais ===
+@app.get("/api/admin/stats")
+def get_admin_stats():
+    try:
+        count_users = 0
+        count_projects = 0
+        
+        # Contagens Totais
+        if supabase_admin:
+            res_u = supabase_admin.table('profiles').select('id', count='exact').execute()
+            count_users = res_u.count if res_u.count else 0
+            res_p = supabase_admin.table('projects').select('id', count='exact').execute()
+            count_projects = res_p.count if res_p.count else 0
+        
+        # Estatísticas do Dia (Visitas e Logins)
+        visits = 0
+        logins = 0 # <--- Variável nova
+        
+        if supabase_admin:
+            try:
+                today = datetime.now().strftime('%Y-%m-%d')
+                res_stats = supabase_admin.table('daily_stats').select('*').eq('date', today).single().execute()
+                if res_stats.data:
+                    visits = res_stats.data.get('visits', 0)
+                    logins = res_stats.data.get('logins', 0) # <--- Pega do banco
+            except: pass 
+
+        return {
+            "total_users": count_users,
+            "total_projects": count_projects,
+            "daily_visits": visits, 
+            "daily_logins": logins, # <--- Agora envia o valor real
+            "new_subs": 0 # Esse continua fake até configurarmos o Stripe Webhook
+        }
+    except Exception as e:
+        print(f"Stats Error: {e}")
+        return {"total_users": 0, "total_projects": 0, "daily_visits": 0, "daily_logins": 0}
 # ==================== ROTAS API ====================
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
 
 def get_session_or_load(sid: str) -> TramaGridSession:
     if sid in sessions: return sessions[sid]

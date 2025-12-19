@@ -1,70 +1,69 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from './views/HomeView.vue'
-import EditorView from './views/EditorView.vue'
-import LoginView from './views/LoginView.vue'
-import BuyCreditsView from './views/BuyCreditsView.vue'
-import DashboardView from './views/DashboardView.vue'
+import { createRouter, createWebHistory } from "vue-router";
+import HomeView from "./views/HomeView.vue";
+import LoginView from "./views/LoginView.vue";
+import DashboardView from "./views/DashboardView.vue";
+import EditorView from "./views/EditorView.vue";
+import BuyCreditsView from "./views/BuyCreditsView.vue";
 
-import { supabase } from './supabase'
-import { sessionId } from './api.js' // Importa o sessionId global
+// NOVAS IMPORTS (Vamos criar esses arquivos no passo 4)
+import BlogListView from "./views/BlogListView.vue";
+import BlogPostView from "./views/BlogPostView.vue";
+import AdminBlogView from "./views/AdminBlogView.vue";
 
-const routes = [
-  { path: '/', name: 'home', component: HomeView },
-  { 
-    path: '/editor', 
-    name: 'editor', 
-    component: EditorView,
-    meta: { requiresAuth: true, requiresSession: true } // Protegida
-  },
-  { path: '/login', name: 'login', component: LoginView },
-  { path: '/buy-credits', name: 'buy-credits', component: BuyCreditsView, meta: { requiresAuth: true } },
-  { 
-    path: '/dashboard', 
-    name: 'dashboard', 
-    component: DashboardView, 
-    meta: { requiresAuth: true } 
-  },
-  { path: '/:pathMatch(.*)*', redirect: '/' } // Catch-all
-]
+import { supabase } from "./supabase";
 
 const router = createRouter({
-  history: createWebHistory(),
-  routes
-})
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes: [
+    { path: "/", name: "home", component: HomeView },
+    { path: "/login", name: "login", component: LoginView },
+    { path: "/dashboard", name: "dashboard", component: DashboardView },
+    { path: "/editor", name: "editor", component: EditorView },
+    { path: "/buy-credits", name: "buy-credits", component: BuyCreditsView },
+    
+    // === ROTAS DO BLOG ===
+    { path: "/blog", name: "blog-list", component: BlogListView },
+    { path: "/blog/:slug", name: "blog-post", component: BlogPostView },
+    
+    // === ÁREA ADMINISTRATIVA ===
+    { 
+      path: "/admin", 
+      name: "admin", 
+      component: AdminBlogView,
+      meta: { requiresAuth: true, requiresAdmin: true } 
+    },
+  ],
+});
 
-// =================================================================================
-// NAVIGATION GUARDS (sofisticados e funcionais)
-// =================================================================================
+// Guardas de Rota (Segurança)
 router.beforeEach(async (to, from, next) => {
-  // 1. Busca o usuário atual (cacheado pelo Supabase)
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession();
 
-  const isAuthenticated = !!user
-  const hasSession = !!sessionId.value
-
-  // 2. Rotas que exigem autenticação
-  if (to.meta.requiresAuth && !isAuthenticated) {
-    // Salva a rota que queria acessar pra redirecionar após login
-    return next({ name: 'login', query: { redirect: to.fullPath } })
+  // Verifica se precisa de login
+  if (to.meta.requiresAuth && !session) {
+    next("/login");
+    return;
   }
 
-  // 3. /editor exige sessão ativa
-  if (to.name === 'editor' && to.meta.requiresSession && !hasSession) {
-    return next({ name: 'home' })
+  // Verifica se precisa ser ADMIN
+  if (to.meta.requiresAdmin) {
+    // ⚠️ SUBSTITUA PELO SEU E-MAIL REAL PARA TER ACESSO ⚠️
+    const MY_EMAIL = "millalopes.01@gmail.com"; 
+    
+    if (session?.user?.email !== MY_EMAIL) {
+      alert("Acesso negado: Apenas administradores.");
+      next("/dashboard"); // Manda usuário comum pro dashboard normal
+      return;
+    }
   }
 
-  // 4. Se logado e tentar acessar login → vai pro dashboard
-  if (to.name === 'login' && isAuthenticated) {
-    return next({ name: 'dashboard' })
+  // Redireciona usuário logado da Home para o Dashboard
+  if (to.path === "/" && session) {
+    next("/dashboard");
+    return;
   }
 
-  // 5. Se logado e acessar home → pode ir pro dashboard (opcional)
-  if (to.name === 'home' && isAuthenticated) {
-  return next({ name: 'dashboard' })
-  }
+  next();
+});
 
-  // 6. Tudo ok → prossegue
-  next()
-})
-
-export default router
+export default router;
