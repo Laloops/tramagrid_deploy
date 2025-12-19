@@ -368,7 +368,7 @@
   .highlight { color: #e67e22; }
   .hero-headline { font-size: clamp(2.5rem, 4.5vw, 4.5rem); font-weight: 800; line-height: 1.05; margin-bottom: 24px; letter-spacing: -1px; }
   .text-gradient { background: linear-gradient(135deg, #e07e06 30%, #f1c40f 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; display: inline-block; }
-  .hero-description { font-size: 1.1rem; line-height: 1.6; color: #bbb; margin-bottom: 40px; max-width: 480px; font-weight: 300; }
+  .hero-description { font-size: 1.4rem; line-height: 1.6; color: #d7d7d7; margin-bottom: 40px; max-width: 480px; font-weight: 333; }
   .cta-btn-primary { 
     background: #e67e22; color: white; border: none; padding: 16px 42px; 
     font-size: 1rem; font-weight: 700; border-radius: 8px; cursor: pointer; transition: 0.3s; 
