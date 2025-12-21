@@ -319,6 +319,22 @@ class TramaGridSession:
             
         self._draw_grid()
 
+        # Adicione isso no backend/tramagrid_backend.py dentro da classe TramaGridSession
+    def merge_colors(self, f, t):
+        if not self.quantized: return
+        self._save_state()
+        
+        # OTIMIZAÇÃO: Substitui a cor 'f' pela 't' instantaneamente
+        table = []
+        for i in range(256):
+            table.append(t if i == f else i)
+        self.quantized = self.quantized.point(table)
+        
+        # Remove a cor antiga da paleta
+        self.palette.pop(f, None)
+        self.custom_palette.pop(f, None)
+        self._draw_grid()
+
     def delete_color(self, idx):
         if not self.quantized: return
         self._save_state()
@@ -675,23 +691,41 @@ async def consume_credit(data: UserRequest):
 
 # === STRIPE ===
 @app.post("/api/create-checkout-session")
-async def create_checkout_session(data: CheckoutSession):
+async def create_checkout_session(data: CheckoutSession, request: Request):
     try:
+        # Pega a URL de origem ou usa a padrão
+        origin = request.headers.get('origin')
+        if not origin or "localhost" in origin:
+             base_url = origin # Usa localhost se estiver testando local
+        else:
+             base_url = "https://tramagrid.com.br" # Usa produção se não achar
+        
         unit = 500
         if data.quantity == 2: unit = 495
         elif data.quantity == 10: unit = 299
         elif data.quantity == 50: unit = 179
+        
         checkout = stripe.checkout.Session.create(
             payment_method_types=['card'],
-            line_items=[{'price_data': {'currency': 'brl', 'product_data': {'name': f'{data.quantity} Créditos TramaGrid'}, 'unit_amount': unit}, 'quantity': data.quantity}],
+            line_items=[{
+                'price_data': {
+                    'currency': 'brl', 
+                    'product_data': {'name': f'{data.quantity} Créditos TramaGrid'}, 
+                    'unit_amount': unit
+                }, 
+                'quantity': 1
+            }],
             mode='payment',
-            success_url='https://tramagrid.com.br/buy-credits?success=true',
-            cancel_url='https://tramagrid.com.br/buy-credits?canceled=true',
+            # IMPORTANTE: As URLs aqui precisam ser absolutas e corretas
+            success_url=f'{base_url}/buy-credits?success=true',
+            cancel_url=f'{base_url}/buy-credits?canceled=true',
             client_reference_id=data.user_id,
             metadata={'credits': data.quantity}
         )
         return {"url": checkout.url}
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e: 
+        print(f"Erro Stripe: {e}")
+        raise HTTPException(500, str(e))
 
 @app.post("/api/webhook")
 async def webhook_received(request: Request):
