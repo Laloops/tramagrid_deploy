@@ -3,7 +3,8 @@
   import { useRouter, useRoute } from 'vue-router'
   import { supabase } from '../supabase'
   import { showToast } from '../toast.js' // <--- Importando nosso Toast
-  
+  import { API_BASE } from '../api.js' 
+
   const router = useRouter()
   const route = useRoute()
   const loading = ref(false)
@@ -29,12 +30,12 @@
   
     loading.value = true
     try {
-      const res = await fetch('/api/create-checkout-session', {
+      const res = await fetch(`${API_BASE}/api/create-checkout-session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           quantity: quantity, 
-          user_id: user.value.id 
+          user_id: user.value.id
         })
       })
   
