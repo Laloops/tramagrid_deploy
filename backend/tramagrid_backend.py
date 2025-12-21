@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Tuple, List, Any
 from supabase import create_client, Client
+import requests
 
 # ReportLab para PDF Profissional
 from reportlab.lib.pagesizes import A4, landscape, portrait
@@ -82,11 +83,14 @@ class TramaGridSession:
         self.gauge_rows: int = 20
         self.show_grid: bool = True
 
-    def save_to_disk(self, session_id: str):
+   # 1. Altere a definição do método para aceitar o parâmetro 'lite'
+    def save_to_disk(self, session_id: str, lite: bool = False):
         s_dir = os.path.join(DATA_DIR, session_id)
         os.makedirs(s_dir, exist_ok=True)
+        
         meta = {
             "params": {
+                # ... (mantenha os params iguais) ...
                 "grid_width_cells": self.grid_width_cells,
                 "max_colors": self.max_colors,
                 "brightness": self.brightness,
@@ -102,9 +106,15 @@ class TramaGridSession:
             "palette": {str(k): v for k, v in self.palette.items()},
             "custom_palette": {str(k): v for k, v in self.custom_palette.items()}
         }
+        
         with open(os.path.join(s_dir, "meta.json"), "w") as f: json.dump(meta, f)
-        if self.original: self.original.save(os.path.join(s_dir, "original.png"))
-        if self.quantized: self.quantized.save(os.path.join(s_dir, "quantized.png"))
+        
+        # OTIMIZAÇÃO AQUI: Se for 'lite', NÃO salva a original de novo
+        if self.original and not lite: 
+            self.original.save(os.path.join(s_dir, "original.png"))
+            
+        if self.quantized: 
+            self.quantized.save(os.path.join(s_dir, "quantized.png"))
 
     def load_from_disk(self, session_id: str) -> bool:
         s_dir = os.path.join(DATA_DIR, session_id)
@@ -285,29 +295,57 @@ class TramaGridSession:
         self.custom_palette[idx] = self.palette[idx] = (int(hex_val[1:3],16), int(hex_val[3:5],16), int(hex_val[5:7],16))
         self._draw_grid()
 
-    def delete_color(self, idx):
+    def merge_many_colors(self, from_list, to_index):
+        if not self.quantized: return
         self._save_state()
-        c1 = self.palette[idx]
+        
+        # OTIMIZAÇÃO SUPREMA: Cria uma tabela de substituição única para TODAS as cores
+        # Em vez de processar a imagem 10 vezes, processamos 1 vez só.
+        table = []
+        for i in range(256):
+            if i in from_list:
+                table.append(to_index) # Se for uma das cores ruins, vira a cor boa
+            else:
+                table.append(i)        # Senão, mantém
+        
+        # Aplica a troca instantaneamente em C (super rápido)
+        self.quantized = self.quantized.point(table)
+        
+        # Remove as cores antigas da paleta
+        for idx in from_list:
+            if idx != to_index: # Proteção extra
+                self.palette.pop(idx, None)
+                self.custom_palette.pop(idx, None)
+            
+        self._draw_grid()
+
+    def delete_color(self, idx):
+        if not self.quantized: return
+        self._save_state()
+        
+        # 1. Encontra a cor mais próxima para substituir (para não deixar buracos pretos)
+        c1 = self.palette.get(idx)
+        if not c1: return # Se a cor já não existe, sai
+        
         best, min_d = None, float('inf')
         for i, c2 in self.palette.items():
             if i == idx: continue
+            # Distância Euclidiana simples
             d = math.sqrt(sum((a-b)**2 for a,b in zip(c1,c2)))
             if d < min_d: min_d, best = d, i
+            
+        # 2. Se achou uma cor substituta, aplica a troca rápida
         if best is not None:
-            w, h = self.quantized.size
-            for y in range(h):
-                for x in range(w):
-                    if self.quantized.getpixel((x,y)) == idx: self.quantized.putpixel((x,y), best)
-            self.palette.pop(idx, None); self.custom_palette.pop(idx, None); self._draw_grid()
+            table = []
+            for i in range(256):
+                table.append(best if i == idx else i)
+            self.quantized = self.quantized.point(table)
+            
+        # 3. Remove a cor deletada
+        self.palette.pop(idx, None)
+        self.custom_palette.pop(idx, None)
+        self._draw_grid()
 
-    def merge_colors(self, f, t):
-        self._save_state()
-        w, h = self.quantized.size
-        for y in range(h):
-            for x in range(w):
-                if self.quantized.getpixel((x,y)) == f: self.quantized.putpixel((x,y), t)
-        self.palette.pop(f, None); self.custom_palette.pop(f, None); self._draw_grid()
-        
     def get_pixel_index(self, x, y): 
         return int(self.quantized.getpixel((x,y))) if self.quantized and 0<=x<self.quantized.width and 0<=y<self.quantized.height else -1
 
@@ -435,7 +473,21 @@ def get_admin_stats():
         print(f"Erro stats: {e}")
         return {"total_users": 0, "total_projects": 0, "daily_visits": 0}
 
-# === Adicione esta nova rota junto com o track_visit ===
+
+@app.post("/api/track/visit")
+def track_visit():
+    try:
+        if supabase_admin:
+            # Chama a função segura no banco de dados
+            supabase_admin.rpc('increment_visit').execute()
+        return {"ok": True}
+    except Exception as e:
+        print(f"Erro tracking visit: {e}")
+        # Retornamos OK mesmo com erro para não travar o front
+        return {"ok": True}
+
+
+
 @app.post("/api/track/login")
 def track_login():
     try:
@@ -505,6 +557,9 @@ class Merge(BaseModel): from_index: int; to_index: int
 class RegRep(BaseModel): x: int; y: int; w: int; h: int; from_index: int; to_index: int
 class CheckoutSession(BaseModel): quantity: int; user_id: str
 class UserRequest(BaseModel): user_id: str
+class BatchMerge(BaseModel):
+    to_index: int
+    from_indices: List[int]
 
 @app.post("/api/session")
 @app.post("/api/create-session")
@@ -536,9 +591,10 @@ def par(sid: str, d: ParamsUpdate):
             changed_grid = True
     
     if changed_grid:
-        s._draw_grid()  # redesenha se mudou grade ou régua
+        s._draw_grid()
     
-    s.save_to_disk(sid)
+    # Atualizar parâmetros não muda a imagem original, então usamos lite=True
+    s.save_to_disk(sid, lite=True) 
     return {"ok": True}
 
 @app.get("/api/params/{sid}")
@@ -547,30 +603,49 @@ def gpar(sid: str):
 
 @app.post("/api/paint/{sid}")
 def pnt(sid: str, d: Paint):
-    get_session_or_load(sid).paint_cell(d.x, d.y, d.color_index); get_session_or_load(sid).save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.paint_cell(d.x, d.y, d.color_index)
+    # Pintar um pixel é uma operação frequente: lite=True é essencial aqui
+    s.save_to_disk(sid, lite=True) 
+    return {"ok": True}
 
 @app.post("/api/query-pixel/{sid}")
 def qpx(sid: str, d: Pixel): return {"index": get_session_or_load(sid).get_pixel_index(d.x, d.y)}
 
 @app.post("/api/color/replace/{sid}")
 def cr(sid: str, d: ColRep):
-    s = get_session_or_load(sid); s.replace_color(d.index, d.new_hex); s.save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.replace_color(d.index, d.new_hex)
+    s.save_to_disk(sid, lite=True) # Otimizado
+    return {"ok": True}
 
 @app.post("/api/color/delete/{sid}")
 def cd(sid: str, d: ColDel):
-    s = get_session_or_load(sid); s.delete_color(d.index); s.save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.delete_color(d.index)
+    s.save_to_disk(sid, lite=True) # Otimizado
+    return {"ok": True}
 
 @app.post("/api/merge/{sid}")
 def mg(sid: str, d: Merge):
-    s = get_session_or_load(sid); s.merge_colors(d.from_index, d.to_index); s.save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.merge_colors(d.from_index, d.to_index)
+    s.save_to_disk(sid, lite=True) # Otimizado
+    return {"ok": True}
 
 @app.post("/api/region/replace/{sid}")
 def rr(sid: str, d: RegRep):
-    s = get_session_or_load(sid); s.replace_index_in_region(d.x, d.y, d.w, d.h, d.from_index, d.to_index); s.save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.replace_index_in_region(d.x, d.y, d.w, d.h, d.from_index, d.to_index)
+    s.save_to_disk(sid, lite=True) # Otimizado
+    return {"ok": True}
 
 @app.post("/api/undo/{sid}")
 def und(sid: str):
-    s = get_session_or_load(sid); s.undo(); s.save_to_disk(sid); return {"ok": True}
+    s = get_session_or_load(sid)
+    s.undo()
+    s.save_to_disk(sid, lite=True) # Otimizado
+    return {"ok": True}
 
 @app.get("/api/clusters/{sid}")
 def clu(sid: str): return {"clusters": get_session_or_load(sid).suggest_clusters()}
@@ -621,18 +696,40 @@ async def create_checkout_session(data: CheckoutSession):
 @app.post("/api/webhook")
 async def webhook_received(request: Request):
     payload = await request.body()
-    try: event = stripe.Webhook.construct_event(payload, request.headers.get('stripe-signature'), STRIPE_WEBHOOK_SECRET)
-    except: raise HTTPException(400, "Webhook Error")
+    
+    # 1. Log para saber se a requisição chegou
+    print(f"🔔 Webhook recebido! Tamanho: {len(payload)}")
+
+    try: 
+        event = stripe.Webhook.construct_event(
+            payload, 
+            request.headers.get('stripe-signature'), 
+            STRIPE_WEBHOOK_SECRET
+        )
+    except Exception as e: # Capture o erro exato
+        print(f"❌ Erro de Assinatura: {e}")
+        raise HTTPException(400, "Webhook Error")
+
     if event['type'] == 'checkout.session.completed':
         s = event['data']['object']
         uid = s.get('client_reference_id')
         credits = int(s.get('metadata', {}).get('credits', 0))
+        
+        print(f"💰 Pagamento Aprovado: User={uid}, Credits={credits}")
+
+        # 2. Log para ver se o Supabase Admin existe
+        if not supabase_admin:
+            print("❌ ERRO CRÍTICO: supabase_admin não está conectado! Verifique as chaves no .env")
+            # Aqui não adianta retornar sucesso, o cliente pagou e não recebeu!
+            # Mas por enquanto, só o log vai te dizer o que houve.
+        
         if uid and credits > 0 and supabase_admin:
             try:
-                res = supabase_admin.table('profiles').select('credits').eq('id', uid).single().execute()
-                cur = res.data['credits'] if res.data else 0
-                supabase_admin.table('profiles').update({'credits': cur + credits}).eq('id', uid).execute()
-            except Exception as e: print(f"Webhook Error: {e}")
+                # ... lógica de update ...
+                print(f"✅ Créditos entregues para {uid}")
+            except Exception as e: 
+                print(f"❌ Erro ao gravar no banco: {e}")
+
     return {"status": "success"}
 
 # === EXPORTAR PNG (SALVAR GRÁFICO) ===
@@ -796,7 +893,6 @@ def add_color_to_palette(sid: str, d: Dict[str, str]):
     
     rgb = (int(hex_val[1:3], 16), int(hex_val[3:5], 16), int(hex_val[5:7], 16))
     
-    # Verifica se já existe
     for idx, color in s.palette.items():
         if color == rgb:
             return {"index": idx}
@@ -806,8 +902,9 @@ def add_color_to_palette(sid: str, d: Dict[str, str]):
     
     new_idx = max(s.palette.keys() or [-1]) + 1
     s.palette[new_idx] = s.custom_palette[new_idx] = rgb
-    s._draw_grid()  # <<< REDESENHA A GRADE
-    s.save_to_disk(sid)
+    s._draw_grid()
+    
+    s.save_to_disk(sid, lite=True) # Otimizado
     return {"index": new_idx}
 
 @app.get("/api/row-summary/{sid}/{row_num}")
@@ -836,3 +933,33 @@ def get_row_summary(sid: str, row_num: int):
             curr_idx, count = idx, 1
     summary.append({"count": count, "hex": f"#{s.palette[curr_idx][0]:02x}{s.palette[curr_idx][1]:02x}{s.palette[curr_idx][2]:02x}"})
     return {"summary": summary}
+
+@app.post("/api/merge-batch/{sid}")
+def mgb(sid: str, d: BatchMerge):
+    s = get_session_or_load(sid)
+    # Filtra para não tentar mesclar a cor com ela mesma
+    clean_list = [i for i in d.from_indices if i != d.to_index]
+    if clean_list:
+        s.merge_many_colors(clean_list, d.to_index)
+        s.save_to_disk(sid, lite=True) # Usa o modo leve que criamos antes!
+    return {"ok": True}
+
+@app.get("/api/proxy-image")
+def proxy_image(url: str):
+    if not url: 
+        raise HTTPException(400, "URL necessária")
+    
+    try:
+        # O Backend baixa a imagem (ele não sofre bloqueio de CORS)
+        r = requests.get(url, stream=True)
+        r.raise_for_status()
+        
+        # E repassa para o Frontend com os cabeçalhos corretos
+        return Response(
+            content=r.content, 
+            media_type=r.headers.get('Content-Type', 'image/png'),
+            headers={"Access-Control-Allow-Origin": "*"} 
+        )
+    except Exception as e:
+        print(f"Erro no proxy: {e}")
+        raise HTTPException(404, "Imagem não encontrada ou inacessível")

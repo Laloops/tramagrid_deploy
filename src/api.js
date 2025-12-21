@@ -2,11 +2,11 @@ import { ref } from 'vue'
 
 // Definição da URL base da API
 const RENDER_URL = 'https://tramagrid-api.onrender.com';
-
 export const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5000' : RENDER_URL);
 
 // --- ESTADO GLOBAL ---
-export const sessionId = ref('') 
+// ALTERAÇÃO 1: Tenta pegar do localStorage primeiro
+export const sessionId = ref(localStorage.getItem('tramagrid_session_id') || '') 
 export const eventBus = new EventTarget()
 export const activeColorIndex = ref(0)
 
@@ -21,12 +21,43 @@ export async function createSession() {
     const res = await fetch(`${API_BASE}/api/session`, { method: 'POST' })
     if (!res.ok) throw new Error(`Erro ${res.status}: ${await res.text()}`)
     const data = await res.json()
+    
+    // ALTERAÇÃO 2: Salva no localStorage e na memória
     sessionId.value = data.session_id
+    localStorage.setItem('tramagrid_session_id', data.session_id)
+    
     console.log("Sessão criada:", sessionId.value)
   } catch (err) {
     console.error("Erro ao criar sessão:", err)
     sessionId.value = ''
+    localStorage.removeItem('tramagrid_session_id') // Limpa se falhar
     throw err
+  }
+}
+
+// NOVA FUNÇÃO: Validar se a sessão antiga ainda existe no servidor
+export async function restoreSession() {
+  const savedId = localStorage.getItem('tramagrid_session_id');
+  if (!savedId) return false;
+
+  try {
+    // Tenta buscar os parâmetros dessa sessão para ver se o servidor responde 200 OK
+    const res = await fetch(`${API_BASE}/api/params/${savedId}`);
+    if (res.ok) {
+      sessionId.value = savedId;
+      console.log("Sessão restaurada:", savedId);
+      eventBus.dispatchEvent(new Event('refresh')); // Atualiza a tela
+      return true;
+    } else {
+      console.warn("Sessão antiga expirou ou não existe mais.");
+      // Se o servidor disse que não existe (404), limpamos
+      sessionId.value = '';
+      localStorage.removeItem('tramagrid_session_id');
+      return false;
+    }
+  } catch (e) {
+    console.error("Erro ao tentar restaurar sessão:", e);
+    return false; // Assumimos falha, mas não limpamos o ID caso seja só erro de internet
   }
 }
 
@@ -160,14 +191,32 @@ export async function replaceColorInRegion(x, y, w, h, fromIndex, toIndex) {
 }
 
 // --- CARREGAR PROJETO ---
+// No arquivo src/api.js
+
 export async function loadProjectFromSupabase(project) {
   try {
     const imageUrl = project.image_url || project.image_path
     if (!imageUrl) throw new Error("Projeto sem imagem.")
 
-    const response = await fetch(imageUrl)
-    if (!response.ok) throw new Error("Falha ao baixar imagem do projeto")
-    const blob = await response.blob()
+    // Tenta baixar a imagem. Se der erro de CORS, o 'fetch' vai falhar.
+    let blob;
+    try {
+      // Tentativa 1: Direto (Rápido)
+      const response = await fetch(imageUrl, { mode: 'cors' });
+      if (!response.ok) throw new Error("Falha direta");
+      blob = await response.blob();
+    } catch (directError) {
+      console.warn("CORS detectado, tentando via Proxy...", directError);
+      
+      // Tentativa 2: Via Proxy (Seguro)
+      // Enviamos a URL da imagem como parâmetro para o nosso backend
+      const proxyUrl = `${API_BASE}/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
+      const proxyRes = await fetch(proxyUrl);
+      
+      if (!proxyRes.ok) throw new Error("Falha também no proxy");
+      blob = await proxyRes.blob();
+    }
+
     const file = new File([blob], "project_source.png", { type: "image/png" })
 
     await createSession()
@@ -260,3 +309,12 @@ export async function getRowSummary(rowNum) {
   return data.summary || []
 }
 
+export async function mergeBatch(fromIndices, toIndex) {
+  if (!sessionId.value) return
+  await fetch(`${API_BASE}/api/merge-batch/${sessionId.value}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from_indices: fromIndices, to_index: toIndex })
+  })
+  eventBus.dispatchEvent(new Event('refresh'))
+}

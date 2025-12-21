@@ -1,6 +1,6 @@
 <script setup>
   import { ref, onMounted, watch } from 'vue'
-  import { getColorClusters, mergeColors, getPalette } from '../api.js'
+  import { getColorClusters, mergeBatch, getPalette } from '../api.js' // <--- Troque mergeColors por mergeBatch (ou mantenha ambos)
   import { showToast } from '../toast.js' // <--- Importando Toast
   
   const emit = defineEmits(['close'])
@@ -68,16 +68,26 @@
   async function acceptMerge(group) {
     if (group.ignored) return
     try {
-        const others = group.indices.filter(i => i !== group.target)
-        for (const idx of others) {
-          await mergeColors(idx, group.target)
-        }
+        // Pega todos os índices que NÃO são o alvo (target)
+        const colorsToRemove = group.indices.filter(i => i !== group.target)
+        
+        if (colorsToRemove.length === 0) return;
+
+        // CHAMA A NOVA ROTA DE LOTE (1 Requisição em vez de N)
+        await mergeBatch(colorsToRemove, group.target)
+        
         group.ignored = true 
-        showToast("Cores agrupadas com sucesso!", "success") // <--- Toast Sucesso
+        showToast("Cores agrupadas com sucesso!", "success")
+        
+        // Pequeno delay para atualizar a lista local sem recarregar tudo do zero
+        // (Opcional, mas melhora a UX)
+        clusters.value = clusters.value.filter(g => !g.ignored)
+        
     } catch (e) {
+        console.error(e)
         showToast("Erro ao agrupar cores.", "error")
     }
-  }
+}
   </script>
   
   <template>

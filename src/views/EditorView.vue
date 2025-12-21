@@ -7,6 +7,7 @@
   import { sessionId, getGridImage, getParams, API_BASE } from '../api.js'; 
   import { supabase } from '../supabase';
   import { showToast } from '../toast.js';
+  import { restoreSession } from '../api.js'; // Importe a função
   
   const router = useRouter();
   const isLoading = ref(false); 
@@ -85,9 +86,17 @@
     }
   }
   
-  onMounted(() => {
-    if (!sessionId.value) router.push('/');
-  });
+  onMounted(async () => {
+  // Se não tiver ID na memória, tenta restaurar do disco/localstorage
+  if (!sessionId.value) {
+    const success = await restoreSession();
+    if (!success) {
+      // Só redireciona se realmente falhar em restaurar
+      showToast("Sessão expirada ou não encontrada.", "error");
+      router.push('/'); 
+    }
+  }
+});
   </script>
   
   <template>

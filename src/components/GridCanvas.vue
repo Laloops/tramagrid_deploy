@@ -66,6 +66,7 @@
     window.removeEventListener('mouseup', stopHudDrag);
   }
   
+
   const activeColorHex = computed(() => {
     const color = fullPalette.value.find(c => c.index === activeColorIndex.value);
     return color ? color.hex : '#ffffff';
@@ -120,27 +121,81 @@
   });
   
   // === LÓGICA DE ZOOM (RODA DO MOUSE) ===
-  function handleWheel(e) {
-    e.preventDefault(); // Impede o scroll da página
+// === LÓGICA DE ZOOM E PAN (TRACKPAD FRIENDLY) ===
+function handleWheel(e) {
+    e.preventDefault(); // Impede o navegador de rolar a página inteira
 
-    const zoomIntensity = 0.1;
-    const direction = e.deltaY < 0 ? 1 : -1;
-    // Calcula novo zoom com limites
-    const newZoom = Math.max(0.1, Math.min(10.0, zoom.value + (direction * zoomIntensity * zoom.value)));
+    // Detecta se é gesto de PINÇA (Trackpad) ou CTRL+SCROLL
+    // A maioria dos navegadores ativa e.ctrlKey automaticamente no gesto de pinça
+    if (e.ctrlKey) {
+      // --- MODO ZOOM (Pinça ou Ctrl+Roda) ---
+      const zoomIntensity = 0.05; // Mais suave para trackpad
+      // No trackpad, deltaY é pequeno, então normalizamos um pouco
+      const delta = -e.deltaY; 
+      const direction = delta > 0 ? 1 : -1;
+      
+      const newZoom = Math.max(0.1, Math.min(10.0, zoom.value + (direction * zoomIntensity * zoom.value)));
 
-    // Lógica para dar zoom na direção do mouse (focar onde aponta)
-    const rect = e.currentTarget.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+      // Zoom focado no ponteiro do mouse
+      const rect = e.currentTarget.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
 
-    // Coordenada do mouse no "mundo" (imagem) antes do zoom
-    const worldX = (mouseX - panX.value) / zoom.value;
-    const worldY = (mouseY - panY.value) / zoom.value;
+      const worldX = (mouseX - panX.value) / zoom.value;
+      const worldY = (mouseY - panY.value) / zoom.value;
 
-    // Atualiza zoom e ajusta Pan para manter o ponto do mouse estável
-    panX.value = mouseX - worldX * newZoom;
-    panY.value = mouseY - worldY * newZoom;
-    zoom.value = newZoom;
+      panX.value = mouseX - worldX * newZoom;
+      panY.value = mouseY - worldY * newZoom;
+      zoom.value = newZoom;
+
+    } else {
+      // --- MODO PAN (Scroll normal com 2 dedos) ---
+      // Inverte os eixos se necessário, mas geralmente:
+      // deltaX = scroll horizontal, deltaY = scroll vertical
+      panX.value -= e.deltaX;
+      panY.value -= e.deltaY;
+    }
+  }
+
+  // === SUPORTE A TOUCH (Mapeia toque para mouse) ===
+  function handleTouchStart(e) {
+    if (e.touches.length === 1) {
+      // Toque único = Clique esquerdo
+      const touch = e.touches[0];
+      // Emulamos o evento de mouse para reutilizar a lógica existente
+      onMouseDown({
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        button: 0, // Botão esquerdo
+        preventDefault: () => e.preventDefault()
+      });
+    } else if (e.touches.length === 2) {
+      // Dois dedos = Iniciar Arraste (Pan)
+      isDragging.value = true;
+      const t1 = e.touches[0];
+      dragStart.value = { x: t1.clientX - panX.value, y: t1.clientY - panY.value };
+    }
+  }
+
+  function handleTouchMove(e) {
+    e.preventDefault(); // Impede arrastar a página do navegador
+    if (isDragging.value && e.touches.length === 2) {
+      const t1 = e.touches[0];
+      panX.value = t1.clientX - dragStart.value.x;
+      panY.value = t1.clientY - dragStart.value.y;
+    } else if (e.touches.length === 1) {
+      // Move a ferramenta (pincel ou seleção)
+      const touch = e.touches[0];
+      onMouseMove({
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        preventDefault: () => {}
+      });
+    }
+  }
+
+  function handleTouchEnd(e) {
+    onMouseUp();
   }
 
   function moveRow(delta) {
@@ -166,43 +221,92 @@
     return { gridX, gridY };
   }
   
-  async function handleClick(e) {
-    if (isDragging.value || isSelecting.value || isSpacePressed.value) return; 
-    const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
-    if (gridX < 0 || gridY < 0) return; 
+  // --- 1. Adicione estas definições logo ANTES da função handleClick ---
+
+// Função auxiliar para evitar chamadas excessivas
+function debounce(func, wait) {
+  let timeout;
+  return function(...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
+
+// Cria uma versão do refresh que espera 300ms após o último clique para rodar
+const debouncedRefresh = debounce(() => {
+  refresh();
+}, 300);
+
+
+// --- 2. Aqui está a função handleClick modificada e otimizada ---
+
+async function handleClick(e) {
+  // Verificações iniciais de estado (arrastando, selecionando, espaço apertado)
+  if (isDragging.value || isSelecting.value || isSpacePressed.value) return; 
   
-    if (currentTool.value === 'ruler') {
-      const imgEl = document.getElementById('grid-canvas');
-      const hc = Math.round((imgEl.naturalHeight - 80) / CELL_SIZE);
-      const rowNumber = hc - gridY;
-      highlightedRow.value = (highlightedRow.value === rowNumber) ? -1 : rowNumber;
-      return;
-    }
+  const { gridX, gridY } = getGridCoords(e.clientX, e.clientY);
   
-    const clickedIndex = await getPixelIndex(gridX, gridY);
-    if (clickedIndex === -1) return;
-  
-    if (currentTool.value === 'brush') {
-      await paintCell(gridX, gridY);
-      refresh();
-    } else if (currentTool.value === 'picker') {
-      activeColorIndex.value = clickedIndex;
-      currentTool.value = 'brush';
-      showToast("Cor capturada!", "info");
-    } else if (currentTool.value === 'bucket') {
-      const target = activeColorIndex.value;
-      if (target === clickedIndex) return;
-      if (selectionRect.value) {
-        await replaceColorInRegion(selectionRect.value.x, selectionRect.value.y, selectionRect.value.w, selectionRect.value.h, clickedIndex, target);
-        refresh();
-      } else {
-        if (await showConfirm("Substituir cor no gráfico todo?")) { 
-          await mergeColors(clickedIndex, target); 
-          refresh(); 
-        }
+  // Se clicou fora da grade, ignora
+  if (gridX < 0 || gridY < 0) return; 
+
+  // --- Ferramenta: RÉGUA ---
+  if (currentTool.value === 'ruler') {
+    const imgEl = document.getElementById('grid-canvas');
+    // Cálculo da altura corrigido conforme seu código original
+    const hc = Math.round((imgEl.naturalHeight - 80) / CELL_SIZE);
+    const rowNumber = hc - gridY;
+    highlightedRow.value = (highlightedRow.value === rowNumber) ? -1 : rowNumber;
+    return;
+  }
+
+  // Pega o índice da cor no pixel clicado
+  const clickedIndex = await getPixelIndex(gridX, gridY);
+  if (clickedIndex === -1) return;
+
+  // --- Ferramenta: PINCEL (Otimizada) ---
+  if (currentTool.value === 'brush') {
+    // CORREÇÃO DE PERFORMANCE:
+    // 1. Chamamos paintCell sem 'await' bloqueante no UI thread principal,
+    //    usando .then() para garantir que o envio ocorreu.
+    // 2. Chamamos debouncedRefresh() em vez de refresh() direto. 
+    //    Isso acumula os cliques rápidos e só recarrega a imagem no final.
+    paintCell(gridX, gridY).then(() => {
+      debouncedRefresh();
+    });
+
+  // --- Ferramenta: CONTA-GOTAS ---
+  } else if (currentTool.value === 'picker') {
+    activeColorIndex.value = clickedIndex;
+    currentTool.value = 'brush';
+    showToast("Cor capturada!", "info");
+
+  // --- Ferramenta: BALDE DE TINTA ---
+  } else if (currentTool.value === 'bucket') {
+    const target = activeColorIndex.value;
+    
+    // Se a cor já é a mesma, não faz nada
+    if (target === clickedIndex) return;
+
+    if (selectionRect.value) {
+      // Substituição em região (mantém await pois é operação única e pesada)
+      await replaceColorInRegion(
+        selectionRect.value.x, 
+        selectionRect.value.y, 
+        selectionRect.value.w, 
+        selectionRect.value.h, 
+        clickedIndex, 
+        target
+      );
+      refresh(); // Refresh imediato é ok aqui (clique único)
+    } else {
+      // Substituição global
+      if (await showConfirm("Substituir cor no gráfico todo?")) { 
+        await mergeColors(clickedIndex, target); 
+        refresh(); // Refresh imediato é ok aqui
       }
     }
   }
+}
   
   async function toggleRuler() {
     if (currentTool.value === 'ruler') {
@@ -332,7 +436,10 @@
         @mousemove="onMouseMove" 
         @mouseup="onMouseUp" 
         @mouseleave="onMouseUp"
-        @wheel="handleWheel"
+        @wheel.prevent="handleWheel" 
+        @touchstart.passive="handleTouchStart"
+        @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd"
         :style="{ cursor: isSpacePressed || isDragging ? 'grab' : 'crosshair' }"
       >
         <div class="transform-container" :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, transformOrigin: '0 0' }">
