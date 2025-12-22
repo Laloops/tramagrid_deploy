@@ -74,15 +74,15 @@ export async function generateGrid() {
 
 // --- FERRAMENTAS ---
 
-// CORREÇÃO DE VELOCIDADE: Removemos 'async/await' para ficar instantâneo
-export function paintCell(x, y) {
-  if (!sessionId.value) return
-  
-  fetch(`${API_BASE}/api/paint/${sessionId.value}`, {
+export async function paintCell(x, y) {
+  if (!sessionId.value) return;
+  // Voltamos ao AWAIT para garantir que a ação foi gravada
+  const res = await fetch(`${API_BASE}/api/paint/${sessionId.value}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ x, y, color_index: activeColorIndex.value })
-  }).catch(err => console.error("Erro ao pintar (sync):", err))
+  });
+  return res.ok;
 }
 
 export async function getPixelIndex(x, y) {
@@ -98,10 +98,30 @@ export async function getPixelIndex(x, y) {
   } catch { return -1 }
 }
 
+// No arquivo src/api.js
+
 export async function undoLastAction() {
-  if (!sessionId.value) return
-  await fetch(`${API_BASE}/api/undo/${sessionId.value}`, { method: 'POST' })
-  eventBus.dispatchEvent(new Event('refresh'))
+  if (!sessionId.value) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/undo/${sessionId.value}`, { method: 'POST' });
+    eventBus.dispatchEvent(new Event('refresh'));
+    return res.ok; // Agora retorna o status real do servidor
+  } catch (e) {
+    console.error("Erro no Undo:", e);
+    return false;
+  }
+}
+
+export async function redoLastAction() {
+  if (!sessionId.value) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/redo/${sessionId.value}`, { method: 'POST' });
+    eventBus.dispatchEvent(new Event('refresh'));
+    return res.ok; // Retorna o status real do servidor
+  } catch (e) {
+    console.error("Erro no Redo:", e);
+    return false;
+  }
 }
 
 export async function mergeColors(fromIndex, toIndex) {
@@ -308,3 +328,4 @@ export async function mergeBatch(fromIndices, toIndex) {
   })
   eventBus.dispatchEvent(new Event('refresh'))
 }
+

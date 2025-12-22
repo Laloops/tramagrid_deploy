@@ -102,6 +102,8 @@ class TramaGridSession:
         self.gauge_stitches: int = 20
         self.gauge_rows: int = 20
         self.show_grid: bool = True
+        self.history: List[Dict[str, Any]] = []
+        self.redo_history: List[Dict[str, Any]] = []
 
    # 1. Altere a definição do método para aceitar o parâmetro 'lite'
     def save_to_disk(self, session_id: str, lite: bool = False):
@@ -161,14 +163,45 @@ class TramaGridSession:
 
     def _save_state(self):
         if not self.quantized: return
-        if len(self.history) >= 20: self.history.pop(0)
-        self.history.append({'quantized': self.quantized.copy(), 'palette': self.palette.copy(), 'custom_palette': self.custom_palette.copy()})
+        # Salva o estado ATUAL antes da modificação
+        state = {
+            'quantized': self.quantized.copy(), 
+            'palette': self.palette.copy(), 
+            'custom_palette': self.custom_palette.copy()
+        }
+        if len(self.history) >= 30: self.history.pop(0)
+        self.history.append(state)
+        self.redo_history = [] # Limpa o refazer ao fazer nova ação
 
     def undo(self):
         if not self.history: return
-        s = self.history.pop()
-        self.quantized = s['quantized']; self.palette = s['palette']; self.custom_palette = s['custom_palette']
+        # Salva o estado atual no REDO antes de voltar
+        self.redo_history.append({
+            'quantized': self.quantized.copy(), 
+            'palette': self.palette.copy(), 
+            'custom_palette': self.custom_palette.copy()
+        })
+        
+        last_state = self.history.pop()
+        self.quantized = last_state['quantized']
+        self.palette = last_state['palette']
+        self.custom_palette = last_state['custom_palette']
         self._draw_grid()
+
+    def redo(self): # <--- NOVA FUNÇÃO
+        if not self.redo_history: return
+        state = self.redo_history.pop()
+        # Antes de aplicar o redo, salva onde estamos no undo
+        self.history.append({
+            'quantized': self.quantized.copy(), 
+            'palette': self.palette.copy(), 
+            'custom_palette': self.custom_palette.copy()
+        })
+        self.quantized = state['quantized']
+        self.palette = state['palette']
+        self.custom_palette = state['custom_palette']
+        self._draw_grid()
+
 
     def load_image(self, file_bytes: bytes) -> None:
         self.original = Image.open(io.BytesIO(file_bytes)).convert("RGB")
@@ -1029,6 +1062,15 @@ def mgb(sid: str, d: BatchMerge):
         s.save_to_disk(sid, lite=True) # Usa o modo leve que criamos antes!
     return {"ok": True}
 
+
+@app.post("/api/redo/{sid}")
+def redo_route(sid: str):
+    s = get_session_or_load(sid)
+    s.redo()
+    s.save_to_disk(sid, lite=True)
+    return {"ok": True}
+
+
 @app.get("/api/proxy-image")
 def proxy_image(url: str):
     if not url: 
@@ -1048,3 +1090,5 @@ def proxy_image(url: str):
     except Exception as e:
         print(f"Erro no proxy: {e}")
         raise HTTPException(404, "Imagem não encontrada ou inacessível")
+    
+    
