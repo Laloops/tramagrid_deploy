@@ -406,7 +406,7 @@ function onMouseUp() {
           
           <div class="shortcuts-list">
             <div class="shortcut-item">
-              <span class="key">Scroll Mouse</span> <span>Mover Tela (Pan)</span>
+              <span class="key">Pressionar Scroll</span> <span>Mover Tela (Pan)</span>
             </div>
             <div class="shortcut-item">
               <span class="key">Ctrl + Scroll</span> <span>Aumentar/Diminuir Zoom</span>

@@ -28,14 +28,16 @@ from datetime import datetime
 # --- CORREÇÃO DE CORS ---
 # O navegador exige origens explícitas para permitir credenciais/pagamentos com segurança.
 
-app = FastAPI()
-
 origins = [
     "https://tramagrid.com.br",
     "https://www.tramagrid.com.br",
     "http://localhost:5173",  # Para seus testes locais
     "http://127.0.0.1:5173"
 ]
+
+
+app = FastAPI()
+
 
 
 app.add_middleware(
