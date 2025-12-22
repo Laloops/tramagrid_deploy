@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Tuple, List, Any
 from supabase import create_client, Client
 import requests
-import re  # Adicionado para regex no CORS
 
 # ReportLab para PDF Profissional
 from reportlab.lib.pagesizes import A4, landscape, portrait
@@ -41,7 +40,6 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins, # <--- Aqui usamos a lista específica
-    allow_origin_regex=r"https?://(www\.)?tramagrid\.com\.br",  # Novo: regex para flexibilidade
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,8 +73,9 @@ except Exception as e:
     supabase_admin = None
 
 # ================= LÓGICA DE PROCESSAMENTO =================
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 sessions: Dict[str, "TramaGridSession"] = {}
-BUCKET_NAME = "sessions"  # Nome do bucket no Supabase Storage (crie se não existir)
 
 class TramaGridSession:
     def __init__(self):
@@ -103,44 +102,14 @@ class TramaGridSession:
         self.history: List[Dict[str, Any]] = []
         self.redo_history: List[Dict[str, Any]] = []
 
-    # 1. Altere a definição do método para aceitar o parâmetro 'lite'
+   # 1. Altere a definição do método para aceitar o parâmetro 'lite'
     def save_to_disk(self, session_id: str, lite: bool = False):
-        if not supabase_admin:
-            print("⚠️ Supabase não configurado, usando fallback local (não recomendado).")
-            # Fallback para disco local se Supabase falhar (adicione try/except se quiser)
-            s_dir = os.path.join("data", session_id)
-            os.makedirs(s_dir, exist_ok=True)
-            
-            meta = {
-                "params": {
-                    "grid_width_cells": self.grid_width_cells,
-                    "max_colors": self.max_colors,
-                    "brightness": self.brightness,
-                    "contrast": self.contrast,
-                    "saturation": self.saturation,
-                    "gamma": self.gamma,
-                    "posterize": self.posterize,
-                    "gauge_stitches": self.gauge_stitches,
-                    "gauge_rows": self.gauge_rows,
-                    "show_grid": self.show_grid,
-                    "highlighted_row": self.highlighted_row
-                },
-                "palette": {str(k): v for k, v in self.palette.items()},
-                "custom_palette": {str(k): v for k, v in self.custom_palette.items()}
-            }
-            
-            with open(os.path.join(s_dir, "meta.json"), "w") as f: json.dump(meta, f)
-            
-            if self.original and not lite: 
-                self.original.save(os.path.join(s_dir, "original.png"))
-                
-            if self.quantized: 
-                self.quantized.save(os.path.join(s_dir, "quantized.png"))
-            return
-
-        # Salva no Supabase Storage
+        s_dir = os.path.join(DATA_DIR, session_id)
+        os.makedirs(s_dir, exist_ok=True)
+        
         meta = {
             "params": {
+                # ... (mantenha os params iguais) ...
                 "grid_width_cells": self.grid_width_cells,
                 "max_colors": self.max_colors,
                 "brightness": self.brightness,
@@ -157,81 +126,37 @@ class TramaGridSession:
             "custom_palette": {str(k): v for k, v in self.custom_palette.items()}
         }
         
-        # Salva meta.json como temp e upload
-        temp_meta = "temp_meta.json"
-        with open(temp_meta, "w") as f: json.dump(meta, f)
-        supabase_admin.storage.from_(BUCKET_NAME).upload(f"{session_id}/meta.json", temp_meta)
-        os.remove(temp_meta)
+        with open(os.path.join(s_dir, "meta.json"), "w") as f: json.dump(meta, f)
         
         # OTIMIZAÇÃO AQUI: Se for 'lite', NÃO salva a original de novo
         if self.original and not lite: 
-            temp_original = "temp_original.png"
-            self.original.save(temp_original)
-            supabase_admin.storage.from_(BUCKET_NAME).upload(f"{session_id}/original.png", temp_original)
-            os.remove(temp_original)
+            self.original.save(os.path.join(s_dir, "original.png"))
             
         if self.quantized: 
-            temp_quantized = "temp_quantized.png"
-            self.quantized.save(temp_quantized)
-            supabase_admin.storage.from_(BUCKET_NAME).upload(f"{session_id}/quantized.png", temp_quantized)
-            os.remove(temp_quantized)
+            self.quantized.save(os.path.join(s_dir, "quantized.png"))
 
     def load_from_disk(self, session_id: str) -> bool:
-        if not supabase_admin:
-            print("⚠️ Supabase não configurado, usando fallback local.")
-            # Fallback para disco local
-            s_dir = os.path.join("data", session_id)
-            meta_path = os.path.join(s_dir, "meta.json")
-            if not os.path.exists(meta_path): return False
-            try:
-                with open(meta_path, "r") as f: meta = json.load(f)
-                p = meta.get("params", {})
-                for k, v in p.items():
-                    if hasattr(self, k): setattr(self, k, v)
-                self.palette = {int(k): tuple(v) for k, v in meta.get("palette", {}).items()}
-                self.custom_palette = {int(k): tuple(v) for k, v in meta.get("custom_palette", {}).items()}
-                if os.path.exists(os.path.join(s_dir, "original.png")):
-                    self.original = Image.open(os.path.join(s_dir, "original.png")).convert("RGB")
-                if os.path.exists(os.path.join(s_dir, "quantized.png")):
-                    self.quantized = Image.open(os.path.join(s_dir, "quantized.png")).convert("P")
-                    flat_palette = [0] * 768
-                    for idx, (r, g, b) in self.palette.items():
-                        if idx < 256: flat_palette[idx*3:idx*3+3] = [r, g, b]
-                    self.quantized.putpalette(flat_palette)
-                if self.quantized: self._draw_grid()
-                return True
-            except: return False
-
-        # Carrega do Supabase Storage
-        meta_path = f"{session_id}/meta.json"
+        s_dir = os.path.join(DATA_DIR, session_id)
+        meta_path = os.path.join(s_dir, "meta.json")
+        if not os.path.exists(meta_path): return False
         try:
-            meta_data = supabase_admin.storage.from_(BUCKET_NAME).download(meta_path)
-            meta = json.loads(meta_data.decode('utf-8'))
+            with open(meta_path, "r") as f: meta = json.load(f)
             p = meta.get("params", {})
             for k, v in p.items():
                 if hasattr(self, k): setattr(self, k, v)
             self.palette = {int(k): tuple(v) for k, v in meta.get("palette", {}).items()}
             self.custom_palette = {int(k): tuple(v) for k, v in meta.get("custom_palette", {}).items()}
-            
-            original_path = f"{session_id}/original.png"
-            original_data = supabase_admin.storage.from_(BUCKET_NAME).download(original_path)
-            if original_data:
-                self.original = Image.open(io.BytesIO(original_data)).convert("RGB")
-            
-            quantized_path = f"{session_id}/quantized.png"
-            quantized_data = supabase_admin.storage.from_(BUCKET_NAME).download(quantized_path)
-            if quantized_data:
-                self.quantized = Image.open(io.BytesIO(quantized_data)).convert("P")
+            if os.path.exists(os.path.join(s_dir, "original.png")):
+                self.original = Image.open(os.path.join(s_dir, "original.png")).convert("RGB")
+            if os.path.exists(os.path.join(s_dir, "quantized.png")):
+                self.quantized = Image.open(os.path.join(s_dir, "quantized.png")).convert("P")
                 flat_palette = [0] * 768
                 for idx, (r, g, b) in self.palette.items():
                     if idx < 256: flat_palette[idx*3:idx*3+3] = [r, g, b]
                 self.quantized.putpalette(flat_palette)
-            
             if self.quantized: self._draw_grid()
             return True
-        except Exception as e:
-            print(f"Erro ao carregar do Supabase: {e}")
-            return False
+        except: return False
 
     def _save_state(self):
         if not self.quantized: return
@@ -316,18 +241,23 @@ class TramaGridSession:
         total_w = pad_top_left + wc * self.cell_size + pad_bot_right
         total_h = pad_top_left + hc * self.cell_size + pad_bot_right
         
-        base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
-        
-        # OTIMIZAÇÃO: Amplia a imagem quantizada com NEAREST (rápido em C)
-        resized_pixels = self.quantized.resize((wc * self.cell_size, hc * self.cell_size), Image.Resampling.NEAREST).convert("RGBA")
-        base.paste(resized_pixels, (pad_top_left, pad_top_left))
-        
-        # Se não mostrar grade, para aqui (como antes)
         if not self.show_grid:
+            base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
+            prev = self.quantized.resize((wc * self.cell_size, hc * self.cell_size), Image.Resampling.NEAREST)
+            base.paste(prev, (pad_top_left, pad_top_left))
             self.grid_image = base.convert("RGB")
             return
+
+        base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
+        draw = ImageDraw.Draw(base)
         
-        # Overlay para linhas de grade (semi-transparentes)
+        # Pixels
+        for y in range(hc):
+            for x in range(wc):
+                color = self.palette.get(self.quantized.getpixel((x, y)), (255, 255, 255))
+                px, py = pad_top_left + x * self.cell_size, pad_top_left + y * self.cell_size
+                draw.rectangle([px, py, px + self.cell_size, py + self.cell_size], fill=color)
+
         overlay = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 0))
         d_ov = ImageDraw.Draw(overlay)
         
@@ -341,11 +271,10 @@ class TramaGridSession:
             thk = (x % 10 == 0 or x == 0 or x == wc)
             d_ov.line([(px, pad_top_left), (px, pad_top_left + hc * self.cell_size)], fill=(255,255,255,180 if thk else 70), width=2 if thk else 1)
             
-        # Combina base com overlay
         combined = Image.alpha_composite(base, overlay)
         d_comb = ImageDraw.Draw(combined)
         
-        # --- NÚMEROS DA GRADE (PADRÃO CROCHÊ/TAPESTRY) --- (mantém o loop, mas é leve: só wc + hc iterações)
+              # --- NÚMEROS DA GRADE (PADRÃO CROCHÊ/TAPESTRY) ---
         try:
             font = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
         except:
@@ -356,28 +285,29 @@ class TramaGridSession:
 
         text_color = (100, 100, 100)
 
-        # EIXO X (embaixo da grade): Direita → Esquerda
+        # EIXO X (embaixo da grade): Direita → Esquerda (1 na direita, max na esquerda)
         y_pos_x = pad_top_left + hc * self.cell_size + 5
         for x in range(wc):
-            num = wc - x
+            num = wc - x  # inverte: x=0 vira wc, x=wc-1 vira 1
             txt = str(num)
-            bbox = d_comb.textbbox((0, 0), txt, font=font)
+            bbox = draw.textbbox((0, 0), txt, font=font)
             tw = bbox[2] - bbox[0]
             tx = pad_top_left + x * self.cell_size + (self.cell_size - tw) / 2
             d_comb.text((tx, y_pos_x), txt, fill=text_color, font=font)
 
-        # EIXO Y (lado DIREITO da grade): Baixo → Cima
-        x_pos_y = pad_top_left + wc * self.cell_size + 5
+        # EIXO Y (lado DIREITO da grade): Baixo → Cima (1 embaixo, max em cima)
+        x_pos_y = pad_top_left + wc * self.cell_size + 5  # 5px à direita da grade
         for y in range(hc):
-            num = hc - y
+            num = hc - y  # inverte: y=0 vira hc, y=hc-1 vira 1
             txt = str(num)
-            bbox = d_comb.textbbox((0, 0), txt, font=font)
+            bbox = draw.textbbox((0, 0), txt, font=font)
             th = bbox[3] - bbox[1]
             ty = pad_top_left + y * self.cell_size + (self.cell_size - th) / 2
             d_comb.text((x_pos_y, ty), txt, fill=text_color, font=font)
 
         self.grid_image = combined.convert("RGB")
 
+        #
     def get_palette_info(self) -> List[Dict]:
         """Retorna TODAS as cores da paleta, mesmo as que têm 0 pixels."""
         if not self.palette: return []
@@ -493,7 +423,7 @@ class TramaGridSession:
                 if self.quantized.getpixel((px,py)) == f: self.quantized.putpixel((px,py), t)
         self._draw_grid()
 
-    #
+   #
     def get_grid_base64(self) -> str:
         if not self.grid_image: return ""
         img = self.grid_image.copy()
