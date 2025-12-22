@@ -102,6 +102,7 @@ const activeColorHex = computed(() => {
   return color ? color.hex : "#ffffff";
 });
 
+
 async function refresh() {
   const data = await getGridImage();
   imageSrc.value = data;
@@ -114,6 +115,7 @@ async function redo() {
   refresh();
 }
 
+const showWelcomeModal = ref(false); // Controlo da visibilidade da janela
 
 watch(highlightedRow, async (newVal) => {
   await updateParams({ highlighted_row: newVal });
@@ -130,6 +132,13 @@ watch(highlightedRow, async (newVal) => {
   refresh();
 });
 
+
+function closeWelcomeModal(permanent = false) {
+  if (permanent) {
+    localStorage.setItem('tramagrid_hide_welcome', 'true');
+  }
+  showWelcomeModal.value = false;
+}
 // === CONTROLES DE TECLADO (ESPAÇO PARA ARRASTAR) ===
 function handleKeyDown(e) {
   if (e.code === "Space" && !isSpacePressed.value) {
@@ -144,11 +153,18 @@ function handleKeyUp(e) {
   }
 }
 
+
 onMounted(() => {
   refresh();
-  eventBus.addEventListener("refresh", refresh);
-  window.addEventListener("keydown", handleKeyDown);
-  window.addEventListener("keyup", handleKeyUp);
+  eventBus.addEventListener('refresh', refresh);
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+
+  // VERIFICAÇÃO: Só abre se o utilizador não tiver marcado "não exibir novamente"
+  const hideWelcome = localStorage.getItem('tramagrid_hide_welcome');
+  if (!hideWelcome) {
+    showWelcomeModal.value = true;
+  }
 });
 
 onUnmounted(() => {
@@ -380,6 +396,33 @@ function onMouseUp() {
 
 <template>
   <div class="canvas-wrapper">
+    <Transition name="fade">
+      <div v-if="showWelcomeModal" class="modal-overlay">
+        <div class="welcome-modal">
+          <div class="modal-header">
+            <Keyboard :size="24" class="icon-orange" />
+            <h3>Comandos de Edição</h3>
+          </div>
+          
+          <div class="shortcuts-list">
+            <div class="shortcut-item">
+              <span class="key">Scroll Mouse</span> <span>Mover Tela (Pan)</span>
+            </div>
+            <div class="shortcut-item">
+              <span class="key">Ctrl + Scroll</span> <span>Aumentar/Diminuir Zoom</span>
+            </div>
+            <div class="shortcut-item">
+              <span class="key">Espaço + Clique</span> <span>Arrastar Gráfico</span>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn-outline" @click="closeWelcomeModal(true)">Não exibir novamente</button>
+            <button class="btn-primary" @click="closeWelcomeModal(false)">Entendi!</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
     <div
       class="side-hud"
       :class="{ minimized: isHudMinimized }"
@@ -453,14 +496,7 @@ function onMouseUp() {
               </button>
             </div>
           </div>
-          <div class="help-wrapper">
-      <div class="shortcuts-tooltip">
-        <div class="shortcut-item"><span class="key">Scroll</span> <span>Mover</span></div>
-        <div class="shortcut-item"><span class="key">Ctrl+Scroll</span> <span>Zoom</span></div>
-        <div class="shortcut-item"><span class="key">Espaço+Click</span> <span>Arrastar</span></div>
-      </div>
-      <div class="help-icon"><Keyboard :size="20" /></div>
-    </div>
+      
         </div>
 
         <div class="divider"></div>
@@ -820,24 +856,92 @@ button.active {
 }
 /* Adicione no final do estilo do GridCanvas.vue */
 
-.help-wrapper {
-  position: absolute; bottom: 20px; right: 20px;
-  z-index: 950; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000; /* Garante que fica à frente de tudo */
 }
-.help-icon {
-  width: 36px; height: 36px; background: rgba(30, 30, 31, 0.8);
-  backdrop-filter: blur(4px); border: 1px solid #444; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; color: #ccc; cursor: help;
+
+.welcome-modal {
+  background: rgba(30, 30, 31, 0.95);
+  backdrop-filter: blur(15px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 30px;
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
-.help-wrapper:hover .help-icon { background: #e67e22; color: white; }
-.shortcuts-tooltip {
-  background: rgba(0, 0, 0, 0.9); padding: 12px; border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1); color: #ddd; font-size: 0.7rem;
-  display: flex; flex-direction: column; gap: 8px; min-width: 150px;
-  opacity: 0; transform: translateY(10px); pointer-events: none; transition: 0.2s;
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
 }
-.help-wrapper:hover .shortcuts-tooltip { opacity: 1; transform: translateY(0); }
-.shortcut-item { display: flex; justify-content: space-between; align-items: center; }
-.key { background: rgba(255, 255, 255, 0.1); padding: 2px 4px; border-radius: 4px; color: #fff; font-family: monospace; }
+
+.modal-header h3 { margin: 0; font-size: 1.2rem; }
+.icon-orange { color: #e67e22; }
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shortcut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.key {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #fff;
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* Botões da Janela */
+.btn-primary {
+  flex: 1;
+  background: #e67e22;
+  color: white;
+  border: none;
+  font-weight: bold;
+}
+.btn-primary:hover { background: #d35400; }
+
+.btn-outline {
+  flex: 1;
+  background: transparent;
+  border: 1px solid #444;
+  color: #888;
+  font-size: 0.75rem;
+}
+.btn-outline:hover { color: #ccc; border-color: #666; }
+
+/* Animação de entrada */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 </style>
