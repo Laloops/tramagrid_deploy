@@ -29,6 +29,15 @@ from datetime import datetime
 # O navegador exige origens explícitas para permitir credenciais/pagamentos com segurança.
 
 app = FastAPI()
+
+origins = [
+    "https://tramagrid.com.br",
+    "https://www.tramagrid.com.br",
+    "http://localhost:5173",  # Para seus testes locais
+    "http://127.0.0.1:5173"
+]
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins, # <--- Aqui usamos a lista específica
@@ -37,12 +46,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-origins = [
-    "https://tramagrid.com.br",
-    "https://www.tramagrid.com.br",
-    "http://localhost:5173",  # Para seus testes locais
-    "http://127.0.0.1:5173"
-]
 
 
 # ================= CONFIGURAÇÃO DE AMBIENTE =================
@@ -947,8 +950,6 @@ def export_pdf(sid: str):
 
 # --- NOVOS ENDPOINTS ---
 
-# No arquivo backend/tramagrid_backend.py
-
 @app.post("/api/color/add/{sid}")
 def add_color_to_palette(sid: str, d: Dict[str, str]):
     s = get_session_or_load(sid)
@@ -961,35 +962,33 @@ def add_color_to_palette(sid: str, d: Dict[str, str]):
     except:
         raise HTTPException(400, "Cor inválida")
 
-    # 1. Verifica se a cor já existe
+    # 1. Se a cor já existe, retorna o índice dela
     for idx, color in s.palette.items():
         if color == rgb:
             return {"index": idx}
     
-    # 2. LIMPEZA: Remove cores que não estão sendo usadas na imagem
-    # Isso libera espaço na paleta deletando cores antigas
-    if s.quantized:
-        used_colors = set(c[1] for c in s.quantized.getcolors(maxcolors=1000))
-        s.palette = {k: v for k, v in s.palette.items() if k in used_colors}
-        s.custom_palette = {k: v for k, v in s.custom_palette.items() if k in used_colors}
-
-    # 3. EXPANSÃO: Se mesmo limpando estiver cheio, aumenta o limite
+    # 2. LIMPEZA E EXPANSÃO AUTOMÁTICA
+    # Se atingiu o limite atual (ex: 64), tenta limpar ou aumenta +16
     if len(s.palette) >= s.max_colors:
-        if s.max_colors < 256:
-            s.max_colors = min(256, s.max_colors + 16)
-        else:
-            raise HTTPException(400, "Limite máximo de 256 cores reais atingido.")
+        # Primeiro, remove cores não usadas (limpeza)
+        if s.quantized:
+            used = set(c[1] for c in s.quantized.getcolors(maxcolors=1000))
+            s.palette = {k: v for k, v in s.palette.items() if k in used}
+            s.custom_palette = {k: v for k, v in s.custom_palette.items() if k in used}
+        
+        # Se mesmo limpando ainda estiver cheio, aumenta o limite (teto 256)
+        if len(s.palette) >= s.max_colors:
+            if s.max_colors < 256:
+                s.max_colors = min(256, s.max_colors + 16)
+            else:
+                raise HTTPException(400, "Limite máximo de 256 cores atingido.")
     
-    # 4. Encontra um índice livre
+    # 3. Adiciona a nova cor em um índice livre
     new_idx = 0
     while new_idx in s.palette:
         new_idx += 1
         
     s.palette[new_idx] = s.custom_palette[new_idx] = rgb
-    
-    # Atualiza a grade visualmente se necessário (apenas se for repaint, mas aqui é só add palette)
-    # Mas como adicionamos uma cor nova, precisamos garantir que ela exista na estrutura interna
-    
     s.save_to_disk(sid, lite=True)
     return {"index": new_idx}
 
