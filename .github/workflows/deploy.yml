@@ -35,7 +35,7 @@ jobs:
           script: |
             set -e
             cd /var/www/tramagrid
-            
+            echo "${{secrets.ENV}}" > .env
             # Garante que o venv existe antes de tentar ativar
             if [ -d "venv" ]; then
                 source venv/bin/activate
