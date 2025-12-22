@@ -5,7 +5,6 @@ const RENDER_URL = 'https://tramagrid-api.onrender.com';
 export const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5000' : RENDER_URL);
 
 // --- ESTADO GLOBAL ---
-// ALTERAÇÃO 1: Tenta pegar do localStorage primeiro
 export const sessionId = ref(localStorage.getItem('tramagrid_session_id') || '') 
 export const eventBus = new EventTarget()
 export const activeColorIndex = ref(0)
@@ -22,42 +21,39 @@ export async function createSession() {
     if (!res.ok) throw new Error(`Erro ${res.status}: ${await res.text()}`)
     const data = await res.json()
     
-    // ALTERAÇÃO 2: Salva no localStorage e na memória
     sessionId.value = data.session_id
     localStorage.setItem('tramagrid_session_id', data.session_id)
-    
     console.log("Sessão criada:", sessionId.value)
   } catch (err) {
     console.error("Erro ao criar sessão:", err)
     sessionId.value = ''
-    localStorage.removeItem('tramagrid_session_id') // Limpa se falhar
+    localStorage.removeItem('tramagrid_session_id')
     throw err
   }
 }
 
-// NOVA FUNÇÃO: Validar se a sessão antiga ainda existe no servidor
+// Verifica se a sessão antiga ainda existe no servidor
 export async function restoreSession() {
   const savedId = localStorage.getItem('tramagrid_session_id');
   if (!savedId) return false;
 
   try {
-    // Tenta buscar os parâmetros dessa sessão para ver se o servidor responde 200 OK
-    const res = await fetch(`${API_BASE}/api/params/${savedId}`);
+    // Adicionamos timestamp (?t=) para evitar cache na verificação
+    const res = await fetch(`${API_BASE}/api/params/${savedId}?t=${Date.now()}`);
     if (res.ok) {
       sessionId.value = savedId;
       console.log("Sessão restaurada:", savedId);
-      eventBus.dispatchEvent(new Event('refresh')); // Atualiza a tela
+      eventBus.dispatchEvent(new Event('refresh'));
       return true;
     } else {
-      console.warn("Sessão antiga expirou ou não existe mais.");
-      // Se o servidor disse que não existe (404), limpamos
+      console.warn("Sessão antiga expirou.");
       sessionId.value = '';
       localStorage.removeItem('tramagrid_session_id');
       return false;
     }
   } catch (e) {
     console.error("Erro ao tentar restaurar sessão:", e);
-    return false; // Assumimos falha, mas não limpamos o ID caso seja só erro de internet
+    return false;
   }
 }
 
@@ -77,24 +73,29 @@ export async function generateGrid() {
 }
 
 // --- FERRAMENTAS ---
-export async function paintCell(x, y) {
+
+// CORREÇÃO DE VELOCIDADE: Removemos 'async/await' para ficar instantâneo
+export function paintCell(x, y) {
   if (!sessionId.value) return
-  await fetch(`${API_BASE}/api/paint/${sessionId.value}`, {
+  
+  fetch(`${API_BASE}/api/paint/${sessionId.value}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ x, y, color_index: activeColorIndex.value })
-  })
+  }).catch(err => console.error("Erro ao pintar (sync):", err))
 }
 
 export async function getPixelIndex(x, y) {
   if (!sessionId.value) return -1
-  const res = await fetch(`${API_BASE}/api/query-pixel/${sessionId.value}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, y })
-  })
-  const data = await res.json()
-  return data.index ?? -1
+  try {
+    const res = await fetch(`${API_BASE}/api/query-pixel/${sessionId.value}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x, y })
+    })
+    const data = await res.json()
+    return data.index ?? -1
+  } catch { return -1 }
 }
 
 export async function undoLastAction() {
@@ -121,15 +122,18 @@ export async function getColorClusters() {
 }
 
 // --- VISUALIZAÇÃO ---
+
 export async function getPalette() {
   if (!sessionId.value) return []
-  const res = await fetch(`${API_BASE}/api/palette/${sessionId.value}`)
+  // CORREÇÃO DE CACHE: Adicionado ?t=... para atualizar cores
+  const res = await fetch(`${API_BASE}/api/palette/${sessionId.value}?t=${Date.now()}`)
   return await res.json()
 }
 
 export async function getGridImage() {
   if (!sessionId.value) return ""
-  const res = await fetch(`${API_BASE}/api/grid/${sessionId.value}`)
+  // CORREÇÃO DE CACHE: Adicionado ?t=... para o Desfazer funcionar
+  const res = await fetch(`${API_BASE}/api/grid/${sessionId.value}?t=${Date.now()}`)
   const data = await res.json()
   if (!data) return ""
   if (typeof data === "string") return data
@@ -190,29 +194,20 @@ export async function replaceColorInRegion(x, y, w, h, fromIndex, toIndex) {
   eventBus.dispatchEvent(new Event('refresh'))
 }
 
-// --- CARREGAR PROJETO ---
-// No arquivo src/api.js
-
 export async function loadProjectFromSupabase(project) {
   try {
     const imageUrl = project.image_url || project.image_path
     if (!imageUrl) throw new Error("Projeto sem imagem.")
 
-    // Tenta baixar a imagem. Se der erro de CORS, o 'fetch' vai falhar.
     let blob;
     try {
-      // Tentativa 1: Direto (Rápido)
       const response = await fetch(imageUrl, { mode: 'cors' });
       if (!response.ok) throw new Error("Falha direta");
       blob = await response.blob();
     } catch (directError) {
       console.warn("CORS detectado, tentando via Proxy...", directError);
-      
-      // Tentativa 2: Via Proxy (Seguro)
-      // Enviamos a URL da imagem como parâmetro para o nosso backend
       const proxyUrl = `${API_BASE}/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
       const proxyRes = await fetch(proxyUrl);
-      
       if (!proxyRes.ok) throw new Error("Falha também no proxy");
       blob = await proxyRes.blob();
     }
@@ -239,7 +234,7 @@ export async function loadProjectFromSupabase(project) {
   }
 }
 
-// --- DOWNLOAD PDF (RECEITA) ---
+// --- DOWNLOADS ---
 export async function downloadPdf() {
   if (!sessionId.value) return
   try {
@@ -261,7 +256,6 @@ export async function downloadPdf() {
   }
 }
 
-// --- DOWNLOAD PNG (SALVAR GRÁFICO) ---
 export async function downloadPng() {
   if (!sessionId.value) return
   try {
@@ -283,9 +277,6 @@ export async function downloadPng() {
   }
 }
 
-/* */
-// ... (mantenha todo o código anterior até addColor)
-
 export async function addColor(hex) {
   if (!sessionId.value) return
   const res = await fetch(`${API_BASE}/api/color/add/${sessionId.value}`, {
@@ -301,7 +292,6 @@ export async function addColor(hex) {
   return data.index
 }
 
-// ADICIONE ESTA FUNÇÃO NO FINAL DO ARQUIVO:
 export async function getRowSummary(rowNum) {
   if (!sessionId.value) return []
   const res = await fetch(`${API_BASE}/api/row-summary/${sessionId.value}/${rowNum}`)

@@ -947,6 +947,8 @@ def export_pdf(sid: str):
 
 # --- NOVOS ENDPOINTS ---
 
+# No arquivo backend/tramagrid_backend.py
+
 @app.post("/api/color/add/{sid}")
 def add_color_to_palette(sid: str, d: Dict[str, str]):
     s = get_session_or_load(sid)
@@ -954,20 +956,41 @@ def add_color_to_palette(sid: str, d: Dict[str, str]):
     if not hex_val or len(hex_val) != 7 or hex_val[0] != '#':
         raise HTTPException(400, "Hex inválido")
     
-    rgb = (int(hex_val[1:3], 16), int(hex_val[3:5], 16), int(hex_val[5:7], 16))
-    
+    try:
+        rgb = (int(hex_val[1:3], 16), int(hex_val[3:5], 16), int(hex_val[5:7], 16))
+    except:
+        raise HTTPException(400, "Cor inválida")
+
+    # 1. Verifica se a cor já existe
     for idx, color in s.palette.items():
         if color == rgb:
             return {"index": idx}
     
-    if len(s.palette) >= 64:
-        raise HTTPException(400, "Limite de 64 cores atingido")
+    # 2. LIMPEZA: Remove cores que não estão sendo usadas na imagem
+    # Isso libera espaço na paleta deletando cores antigas
+    if s.quantized:
+        used_colors = set(c[1] for c in s.quantized.getcolors(maxcolors=1000))
+        s.palette = {k: v for k, v in s.palette.items() if k in used_colors}
+        s.custom_palette = {k: v for k, v in s.custom_palette.items() if k in used_colors}
+
+    # 3. EXPANSÃO: Se mesmo limpando estiver cheio, aumenta o limite
+    if len(s.palette) >= s.max_colors:
+        if s.max_colors < 256:
+            s.max_colors = min(256, s.max_colors + 16)
+        else:
+            raise HTTPException(400, "Limite máximo de 256 cores reais atingido.")
     
-    new_idx = max(s.palette.keys() or [-1]) + 1
+    # 4. Encontra um índice livre
+    new_idx = 0
+    while new_idx in s.palette:
+        new_idx += 1
+        
     s.palette[new_idx] = s.custom_palette[new_idx] = rgb
-    s._draw_grid()
     
-    s.save_to_disk(sid, lite=True) # Otimizado
+    # Atualiza a grade visualmente se necessário (apenas se for repaint, mas aqui é só add palette)
+    # Mas como adicionamos uma cor nova, precisamos garantir que ela exista na estrutura interna
+    
+    s.save_to_disk(sid, lite=True)
     return {"index": new_idx}
 
 @app.get("/api/row-summary/{sid}/{row_num}")

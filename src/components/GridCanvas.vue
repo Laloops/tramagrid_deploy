@@ -449,8 +449,21 @@ async function handleClick(e) {
           </div>
         </div>
       </div>
+      <div class="shortcuts-guide">
+      <div class="shortcut-item">
+        <span class="key">Scroll</span> <span>Mover Tela</span>
+      </div>
+      <div class="shortcut-item">
+        <span class="key">Ctrl</span> + <span class="key">Scroll</span> <span>Zoom</span>
+      </div>
+      <div class="shortcut-item">
+        <span class="key">Espaço</span> + <span class="key">Clique</span> <span>Arrastar</span>
+      </div>
     </div>
+
+  </div> 
   </template>
+ 
   
   <style scoped>
   .canvas-wrapper { position: relative; width: 100%; height: 100%; background: #0b0b0b; overflow: hidden; }
@@ -517,4 +530,38 @@ async function handleClick(e) {
   .selection-overlay { position: absolute; border: 2px dashed #f1c40f; background: rgba(241, 196, 15, 0.1); pointer-events: none; }
   .custom-scroll::-webkit-scrollbar { width: 3px; }
   .custom-scroll::-webkit-scrollbar-thumb { background: #444; }
+  /* Adicione no final do estilo do GridCanvas.vue */
+
+.shortcuts-guide {
+  position: absolute;
+  bottom: 20px;
+  right: 20px; /* Ou left: 20px se preferir na esquerda */
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  padding: 10px 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #aaa;
+  font-size: 0.75rem;
+  pointer-events: none; /* Para não atrapalhar o clique */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 100;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.key {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #fff;
+  font-weight: bold;
+  font-family: monospace;
+}
   </style>
