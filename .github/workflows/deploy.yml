@@ -16,12 +16,8 @@ jobs:
       - name: Deploy backend via rsync (keep venv)
         uses: burnett01/rsync-deployments@v8
         with:
-          switches: >
-            -avz
-            --delete
-            --exclude venv
-            --exclude __pycache__
-            --exclude .git
+          # Colocamos os switches em uma linha única para evitar erros de parsing
+          switches: -avz --delete --exclude='venv' --exclude='__pycache__' --exclude='.git'
           path: backend/
           remote_path: /var/www/tramagrid/
           remote_host: ${{ secrets.SSH_HOST }}
@@ -38,10 +34,16 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           script: |
             set -e
-
             cd /var/www/tramagrid
+            
+            # Garante que o venv existe antes de tentar ativar
+            if [ -d "venv" ]; then
+                source venv/bin/activate
+                pip install -r requirements.txt
+            else
+                echo "Erro: venv não encontrado em /var/www/tramagrid"
+                exit 1
+            fi
 
-            source venv/bin/activate
-            pip install -r requirements.txt
-
-            systemctl restart tramagrid
+            # Reinicia o serviço (certifique-se de que o usuário tem permissão sudo se necessário)
+            sudo systemctl restart tramagrid
