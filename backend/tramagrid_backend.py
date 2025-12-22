@@ -25,8 +25,25 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import ImageReader, simpleSplit
 from datetime import datetime
 
+# --- CORREÇÃO DE CORS ---
+# O navegador exige origens explícitas para permitir credenciais/pagamentos com segurança.
+
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins, # <--- Aqui usamos a lista específica
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+origins = [
+    "https://tramagrid.com.br",
+    "https://www.tramagrid.com.br",
+    "http://localhost:5173",  # Para seus testes locais
+    "http://127.0.0.1:5173"
+]
+
 
 # ================= CONFIGURAÇÃO DE AMBIENTE =================
 env_path = Path(__file__).resolve().parent / '.env'
