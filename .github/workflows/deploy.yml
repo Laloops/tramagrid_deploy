@@ -1,0 +1,47 @@
+name: Deploy Tramagrid
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Deploy backend via rsync (keep venv)
+        uses: burnett01/rsync-deployments@v7.0.2
+        with:
+          switches: >
+            -avz
+            --delete
+            --exclude venv
+            --exclude __pycache__
+            --exclude .git
+          path: backend/
+          remote_path: /var/www/tramagrid/
+          remote_host: ${{ secrets.SSH_HOST }}
+          remote_user: ${{ secrets.SSH_USER }}
+          remote_key: ${{ secrets.SSH_KEY }}
+          remote_port: ${{ secrets.SSH_PORT }}
+
+      - name: Restart tramagrid service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+
+            cd /var/www/tramagrid
+
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            systemctl restart tramagrid
