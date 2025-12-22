@@ -759,10 +759,22 @@ async def webhook_received(request: Request):
         
         if uid and credits > 0 and supabase_admin:
             try:
-                # ... lógica de update ...
-                print(f"✅ Créditos entregues para {uid}")
+                # 1. Busca o saldo atual do usuário
+                res = supabase_admin.table('profiles').select('credits').eq('id', uid).single().execute()
+                
+                # Se o usuário não tiver perfil, assumimos 0
+                current_credits = res.data.get('credits', 0) if res.data else 0
+                
+                # 2. Soma os créditos comprados
+                new_total = current_credits + credits
+                
+                # 3. Grava o novo total no banco
+                supabase_admin.table('profiles').update({'credits': new_total}).eq('id', uid).execute()
+                
+                print(f"✅ SUCESSO: {credits} créditos adicionados para {uid}. Novo saldo: {new_total}")
+                
             except Exception as e: 
-                print(f"❌ Erro ao gravar no banco: {e}")
+                print(f"❌ ERRO CRÍTICO ao salvar no banco: {e}")
 
     return {"status": "success"}
 
