@@ -22,8 +22,8 @@ jobs:
             --exclude venv
             --exclude __pycache__
             --exclude .git
-          src: backend/
-          dest: /var/www/tramagrid/
+          path: backend/
+          remote_path: /var/www/tramagrid/
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_KEY }}
