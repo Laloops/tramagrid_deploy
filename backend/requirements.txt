@@ -6,6 +6,5 @@ stripe
 python-dotenv
 supabase
 pydantic
-reportlab
 reportlab==4.2.2
 requests
