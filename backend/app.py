@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 # Imports diretos para evitar problemas de módulos
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+backend_path = os.path.dirname(__file__)
+sys.path.insert(0, backend_path)
 
 from config import ALLOWED_ORIGINS
 from routers.api import router as api_router
