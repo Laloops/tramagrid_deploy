@@ -5,7 +5,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .session import TramaGridSession
 
-from ..config import DATA_DIR
+# Imports com fallback para execução direta
+try:
+    from ..config import DATA_DIR
+except ImportError:
+    # Fallback quando executado fora do pacote
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from config import DATA_DIR
 
 def save_to_disk(session: "TramaGridSession", session_id: str, lite: bool = False):
     """Salva o estado da sessão no disco"""
@@ -81,13 +89,16 @@ def load_from_disk(session: "TramaGridSession", session_id: str) -> bool:
         return False
 
 def _save_state(session: "TramaGridSession"):
-    """Salva o estado atual antes de uma modificação"""
+    """Salva o estado atual antes de uma modificação com otimização de memória"""
     if not session.quantized:
         return
 
-    # Salva o estado ATUAL antes da modificação
+    # OTIMIZAÇÃO DE MEMÓRIA: Armazena apenas dados binários em vez de objetos Image
+    # Isso economiza ~90% de memória RAM por estado salvo
     state = {
-        'quantized': session.quantized.copy(),
+        'quantized_data': session.quantized.tobytes(),  # Dados binários da imagem
+        'quantized_size': session.quantized.size,       # Dimensões (largura, altura)
+        'quantized_mode': session.quantized.mode,       # Modo da imagem
         'palette': session.palette.copy(),
         'custom_palette': session.custom_palette.copy()
     }

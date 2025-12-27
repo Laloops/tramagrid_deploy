@@ -50,7 +50,7 @@ def generate_grid(session: "TramaGridSession") -> None:
     draw_grid(session)
 
 def draw_grid(session: "TramaGridSession") -> None:
-    """Desenha a grade visual"""
+    """Desenha a grade visual com otimização de performance"""
     if not session.quantized:
         return
 
@@ -64,20 +64,28 @@ def draw_grid(session: "TramaGridSession") -> None:
 
     if not session.show_grid:
         base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
+        # OTIMIZAÇÃO: Usa resize com NEAREST para criar imagem ampliada de uma vez
         prev = session.quantized.resize((wc * session.cell_size, hc * session.cell_size), Image.Resampling.NEAREST)
         base.paste(prev, (pad_top_left, pad_top_left))
         session.grid_image = base.convert("RGB")
         return
 
-    base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
-    draw = ImageDraw.Draw(base)
+    # OTIMIZAÇÃO: Cria a imagem base ampliada de uma só vez em vez de loop aninhado
+    # Primeiro, cria uma imagem RGB temporária com as cores da paleta
+    temp_rgb = Image.new("RGB", (wc, hc))
+    temp_draw = ImageDraw.Draw(temp_rgb)
 
-    # Pixels
+    # Converte imagem indexada para RGB usando a paleta
     for y in range(hc):
         for x in range(wc):
-            color = session.palette.get(session.quantized.getpixel((x, y)), (255, 255, 255))
-            px, py = pad_top_left + x * session.cell_size, pad_top_left + y * session.cell_size
-            draw.rectangle([px, py, px + session.cell_size, py + session.cell_size], fill=color)
+            color_idx = session.quantized.getpixel((x, y))
+            color = session.palette.get(color_idx, (255, 255, 255))
+            temp_draw.point((x, y), color)
+
+    # Agora amplia a imagem de uma só vez com NEAREST (muito mais rápido)
+    base = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
+    upscaled = temp_rgb.resize((wc * session.cell_size, hc * session.cell_size), Image.Resampling.NEAREST)
+    base.paste(upscaled, (pad_top_left, pad_top_left))
 
     overlay = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 0))
     d_ov = ImageDraw.Draw(overlay)

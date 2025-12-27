@@ -10,13 +10,13 @@ def get_palette_info(session: "TramaGridSession") -> List[Dict]:
     if not session.palette:
         return []
 
-    # Conta o uso de pixels de forma eficiente
-    usage = defaultdict(int)
+    # OTIMIZAÇÃO: Usa getcolors() nativo em vez de loop manual
+    # getcolors() retorna lista de tuplas (count, color_index)
+    usage = {}
     if session.quantized:
-        w, h = session.quantized.size
-        for y in range(h):
-            for x in range(w):
-                usage[session.quantized.getpixel((x, y))] += 1
+        colors = session.quantized.getcolors(maxcolors=256)
+        if colors:
+            usage = {color_index: count for count, color_index in colors}
 
     result = []
     # Itera sobre self.palette para garantir que cores novas apareçam
